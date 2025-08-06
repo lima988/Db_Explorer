@@ -1373,3 +1373,6 @@ class MainWindow(QMainWindow):
                 item.appendRow(table_item)
         except Exception as e:
             self.status.showMessage(f"Error expanding schema: {e}", 5000)
+
+
+# test conflict
