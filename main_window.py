@@ -28,8 +28,65 @@ from dialogs.postgres_dialog import PostgresConnectionDialog
 from dialogs.sqlite_dialog import SQLiteConnectionDialog
 # db Importing modules
 import dialogs.db as db
+#count rows
+class NotificationWidget(QWidget):
+    """
+    A custom widget for displaying pgAdmin-style notifications.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.ToolTip)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setObjectName("notificationWidget")
 
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 5, 10, 5)
+        layout.setSpacing(10)
 
+        self.icon_label = QLabel()
+        self.message_label = QLabel()
+        self.close_button = QPushButton("✕")
+        self.close_button.setObjectName("notificationCloseButton")
+        self.close_button.setFixedSize(20, 20)
+        self.close_button.clicked.connect(self.hide)
+
+        layout.addWidget(self.icon_label)
+        layout.addWidget(self.message_label)
+        layout.addStretch()
+        layout.addWidget(self.close_button)
+
+        self.hide_timer = QTimer(self)
+        self.hide_timer.setSingleShot(True)
+        self.hide_timer.timeout.connect(self.hide)
+
+    def show_message(self, message, is_error=False, duration=5000):
+        self.message_label.setText(message)
+        
+        if is_error:
+            self.setProperty("isError", True)
+            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxCritical)
+        else:
+            self.setProperty("isError", False)
+            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
+            
+        self.icon_label.setPixmap(icon.pixmap(16, 16))
+        
+        # Refresh style
+        self.style().unpolish(self)
+        self.style().polish(self)
+        
+        self.show()
+        self.adjustSize()
+
+        # Position at bottom-right of parent
+        if self.parentWidget():
+            parent_rect = self.parentWidget().geometry()
+            status_bar_height = self.parentWidget().statusBar().height() if hasattr(self.parentWidget(), 'statusBar') else 0
+            x = parent_rect.width() - self.width() - 15
+            y = parent_rect.height() - self.height() - status_bar_height - 15
+            self.move(x, y)
+
+        self.hide_timer.start(duration)
 # pgAdmin-style Export Dialog with Tabs
 class ExportDialog(QDialog):
     """
@@ -354,6 +411,9 @@ class MainWindow(QMainWindow):
         self.load_data()
         self.add_tab()  # Add initial worksheet
         self.main_splitter.setSizes([280, 920])
+        #count_rows
+        self.notification_widget = NotificationWidget(self)
+        self.notification_widget.hide()
         self._apply_styles()
 
     # <<< MODIFIED >>> This method now checks if the tab already exists.
@@ -661,7 +721,31 @@ class MainWindow(QMainWindow):
                 padding: 2px;
                 background-color: white;
             }}
+            #change for count
+            /* ADD THESE NEW STYLES FOR NOTIFICATION WIDGET */
+            #notificationWidget {{
+                background-color: #d4edda; /* Green for success */
+                color: #155724;
+                border: 1px solid #c3e6cb;
+                border-radius: 5px;
+                font-size: 9pt;
+            }}
+            #notificationWidget[isError="true"] {{
+                background-color: #f8d7da; /* Red for error */
+                color: #721c24;
+                border: 1px solid #f5c6cb;
+            }}
+            #notificationCloseButton {{
+                background: transparent;
+                border: none;
+                font-weight: bold;
+                color: #555;
+            }}
+            #notificationCloseButton:hover {{
+                color: #000;
+            }}
         """
+            
         self.setStyleSheet(style_sheet)
 
     def add_tab(self):
@@ -1389,10 +1473,11 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(
                     self, "Error", f"Failed to clear history for this connection:\n{e}")
-
+     #last change menu
     def load_sqlite_schema(self, conn_data):
         self.schema_model.clear()
-        self.schema_model.setHorizontalHeaderLabels(["Tables & Views"])
+        # হেডার পরিবর্তন করে দুটি কলাম যুক্ত করা হয়েছে
+        self.schema_model.setHorizontalHeaderLabels(["Name", "Type"])
         db_path = conn_data.get("db_path")
         if not db_path or not os.path.exists(db_path):
             self.status.showMessage(
@@ -1405,14 +1490,21 @@ class MainWindow(QMainWindow):
                 "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY type, name;")
             tables = cursor.fetchall()
             conn.close()
-            for name, type in tables:
+            # প্রতিটি আইটেমের জন্য নাম এবং তার ধরণসহ একটি সারি যুক্ত করা হয়েছে
+            for name, type_str in tables:
                 icon = QIcon(
-                    "assets/table_icon.png") if type == 'table' else QIcon("assets/view_icon.png")
-                item = QStandardItem(icon, name)
-                item.setEditable(False)
-                item.setData(
+                    "assets/table_icon.png") if type_str == 'table' else QIcon("assets/view_icon.png")
+                
+                name_item = QStandardItem(icon, name)
+                name_item.setEditable(False)
+                name_item.setData(
                     {'db_type': 'sqlite', 'conn_data': conn_data}, Qt.ItemDataRole.UserRole)
-                self.schema_model.appendRow(item)
+                
+                type_item = QStandardItem(type_str.capitalize())
+                type_item.setEditable(False)
+                
+                self.schema_model.appendRow([name_item, type_item])
+
             if hasattr(self, '_expanded_connection'):
                 try:
                     self.schema_tree.expanded.disconnect(
@@ -1421,17 +1513,20 @@ class MainWindow(QMainWindow):
                     pass
         except Exception as e:
             self.status.showMessage(f"Error loading SQLite schema: {e}", 5000)
-
+    
+    #last change 2
     def load_postgres_schema(self, conn_data):
         try:
             self.schema_model.clear()
-            self.schema_model.setHorizontalHeaderLabels(["Schemas"])
+            # হেডার পরিবর্তন করে দুটি কলাম যুক্ত করা হয়েছে
+            self.schema_model.setHorizontalHeaderLabels(["Name", "Type"])
             self.pg_conn = psycopg2.connect(host=conn_data["host"], database=conn_data["database"],
                                             user=conn_data["user"], password=conn_data["password"], port=int(conn_data["port"]))
             cursor = self.pg_conn.cursor()
             cursor.execute(
                 "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast') ORDER BY schema_name;")
             schemas = cursor.fetchall()
+            # প্রতিটি স্কিমার জন্য নাম এবং তার ধরণসহ একটি সারি যুক্ত করা হয়েছে
             for (schema_name,) in schemas:
                 schema_item = QStandardItem(
                     QIcon("assets/schema_icon.png"), schema_name)
@@ -1440,7 +1535,12 @@ class MainWindow(QMainWindow):
                              'schema_name': schema_name, 'conn_data': conn_data}
                 schema_item.setData(item_data, Qt.ItemDataRole.UserRole)
                 schema_item.appendRow(QStandardItem("Loading..."))
-                self.schema_model.appendRow(schema_item)
+
+                type_item = QStandardItem("Schema")
+                type_item.setEditable(False)
+
+                self.schema_model.appendRow([schema_item, type_item])
+
             if hasattr(self, '_expanded_connection'):
                 try:
                     self.schema_tree.expanded.disconnect(
@@ -1453,7 +1553,6 @@ class MainWindow(QMainWindow):
             self.status.showMessage(f"Error loading schemas: {e}", 5000)
             if hasattr(self, 'pg_conn') and self.pg_conn:
                 self.pg_conn.close()
-
     def show_schema_context_menu(self, position):
         index = self.schema_tree.indexAt(position)
         if not index.isValid():
@@ -1467,23 +1566,30 @@ class MainWindow(QMainWindow):
         table_name = item.text()
         menu = QMenu()
         view_menu = menu.addMenu("View/Edit Data")
-        query_all_action = QAction("Query all rows from Table", self)
+        query_all_action = QAction("all rows", self)
         query_all_action.triggered.connect(lambda: self.query_table_rows(
             item_data, table_name, limit=None, execute_now=True))
         view_menu.addAction(query_all_action)
-        preview_100_action = QAction("Preview first 100 rows", self)
+        preview_100_action = QAction("first 100 rows", self)
         preview_100_action.triggered.connect(lambda: self.query_table_rows(
             item_data, table_name, limit=100, execute_now=True))
         view_menu.addAction(preview_100_action)
-        last_100_action = QAction("Show last 100 rows", self)
+        last_100_action = QAction("last 100 rows", self)
         last_100_action.triggered.connect(lambda: self.query_table_rows(
             item_data, table_name, limit=100, order='desc', execute_now=True))
         view_menu.addAction(last_100_action)
+         #add count
+        count_rows_action = QAction("Count Rows", self)
+        count_rows_action.triggered.connect(
+            lambda: self.count_table_rows(item_data, table_name)
+        )
+        view_menu.addAction(count_rows_action)
         menu.addSeparator()
         query_tool_action = QAction("Query Tool", self)
         query_tool_action.triggered.connect(
             lambda: self.open_query_tool_for_table(item_data, table_name))
         menu.addAction(query_tool_action)
+        view_menu.addSeparator()
         export_rows_action = QAction("Export Rows", self)
         export_rows_action.triggered.connect(
             lambda: self.export_schema_table_rows(item_data, table_name))
@@ -1590,7 +1696,47 @@ class MainWindow(QMainWindow):
 
         # Update Details
         self.processes_model.item(row, 7).setText(error_message)
+    #count row1
+    def count_table_rows(self, item_data, table_name):
+        if not item_data:
+            return
 
+        conn_data = item_data.get('conn_data')
+        
+        if item_data.get('db_type') == 'postgres':
+            query = f'SELECT COUNT(*) FROM "{item_data.get("schema_name")}"."{table_name}";'
+        else:  # Handles SQLite
+            query = f'SELECT COUNT(*) FROM "{table_name}";'
+
+        self.status_message_label.setText(f"Counting rows for {table_name}...")
+        
+        signals = QuerySignals()
+        runnable = RunnableQuery(conn_data, query, signals)
+
+        # Connect to a specific handler for this action
+        signals.finished.connect(self.handle_count_result)
+        signals.error.connect(self.handle_count_error)
+        
+        self.thread_pool.start(runnable)
+    
+    def handle_count_result(self, conn_data, query, results, columns, row_count, elapsed_time, is_select_query):
+        try:
+            if results and len(results) > 0 and len(results[0]) > 0:
+                count = results[0][0]
+                message = f"Table rows counted: {count}"
+                self.notification_widget.show_message(message)
+                self.status_message_label.setText(f"Successfully counted rows in {elapsed_time:.2f} sec.")
+            else:
+                self.handle_count_error("Could not retrieve count.")
+        except Exception as e:
+            self.handle_count_error(str(e))
+
+    def handle_count_error(self, error_message):
+        self.notification_widget.show_message(f"Error: {error_message}", is_error=True)
+        self.status_message_label.setText("Failed to count rows.")
+
+        #end
+        
     def open_query_tool_for_table(self, item_data, table_name):
         self.query_table_rows(item_data, table_name, execute_now=False)
 
@@ -1618,7 +1764,7 @@ class MainWindow(QMainWindow):
         if execute_now:
             self.tab_widget.setCurrentWidget(new_tab)
             self.execute_query()
-
+    #last change 3
     def load_tables_on_expand(self, index: QModelIndex):
         item = self.schema_model.itemFromIndex(index)
         if not item or (item.rowCount() > 0 and item.child(0).text() != "Loading..."):
@@ -1631,11 +1777,18 @@ class MainWindow(QMainWindow):
             cursor.execute(
                 "SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = %s ORDER BY table_type, table_name;", (schema_name,))
             tables = cursor.fetchall()
+           
             for (table_name, table_type) in tables:
                 icon_path = "assets/table_icon.png" if "TABLE" in table_type else "assets/view_icon.png"
+                display_type = "Table" if "TABLE" in table_type else "View"
+                
                 table_item = QStandardItem(QIcon(icon_path), table_name)
                 table_item.setEditable(False)
                 table_item.setData(item_data, Qt.ItemDataRole.UserRole)
-                item.appendRow(table_item)
+                
+                type_item = QStandardItem(display_type)
+                type_item.setEditable(False)
+
+                item.appendRow([table_item, type_item])
         except Exception as e:
             self.status.showMessage(f"Error expanding schema: {e}", 5000)
