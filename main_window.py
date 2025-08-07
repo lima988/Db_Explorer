@@ -345,7 +345,7 @@ class RunnableQuery(QRunnable):
 
 
 class MainWindow(QMainWindow):
-    QUERY_TIMEOUT = 60000
+    # QUERY_TIMEOUT = 60000
 
     def __init__(self):
         super().__init__()
@@ -1267,13 +1267,13 @@ class MainWindow(QMainWindow):
         signals.finished.connect(
             partial(self.handle_query_result, current_tab))
         signals.error.connect(partial(self.handle_query_error, current_tab))
-        timeout_timer.timeout.connect(
-            partial(self.handle_query_timeout, current_tab, runnable))
+        # timeout_timer.timeout.connect(
+        #     partial(self.handle_query_timeout, current_tab, runnable))
         self.running_queries[current_tab] = runnable
         self.cancel_action.setEnabled(True)
         self.thread_pool.start(runnable)
-        timeout_timer.start(self.QUERY_TIMEOUT)
-        self.status_message_label.setText("Executing query...")
+        # timeout_timer.start(self.QUERY_TIMEOUT)
+        # self.status_message_label.setText("Executing query...")
 
     def update_timer_label(self, label, tab):
         if not label or tab not in self.tab_timers:
