@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTreeView, QTabWidget,
     QSplitter, QLineEdit, QTextEdit, QComboBox, QTableView, QVBoxLayout, QWidget, QStatusBar, QToolBar, QFileDialog,
     QSizePolicy, QPushButton, QInputDialog, QMessageBox, QMenu, QAbstractItemView, QDialog, QFormLayout, QHBoxLayout,
-    QStackedWidget, QLabel, QGroupBox, QDialogButtonBox, QCheckBox, QRadioButton, QStyle
+    QStackedWidget, QLabel, QGroupBox, QDialogButtonBox, QCheckBox, QRadioButton, QStyle, QHeaderView
 )
 from PyQt6.QtGui import (
     QAction, QIcon, QStandardItemModel, QStandardItem, QFont, QMovie, QDesktopServices, QColor, QBrush
@@ -29,6 +29,8 @@ from dialogs.sqlite_dialog import SQLiteConnectionDialog
 # db Importing modules
 import dialogs.db as db
 # count rows
+
+
 class NotificationWidget(QWidget):
     """
     A custom widget for displaying a single notification.
@@ -92,10 +94,13 @@ class NotificationWidget(QWidget):
         #  CHANGE: Emit signal before closing, so the manager can catch it.
         self.closed.emit(self)
         self.close()
+
+
 class NotificationManager:
     """
     Manages the creation, stacking, and display of multiple NotificationWidgets.
     """
+
     def __init__(self, parent_widget):
         self.parent = parent_widget
         self.notifications = []  # List to keep track of active notifications
@@ -108,16 +113,16 @@ class NotificationManager:
         """
         # Create a new notification widget instance
         notification = NotificationWidget(self.parent)
-        
+
         # Connect its 'closed' signal to our handler
         notification.closed.connect(self.on_notification_closed)
-        
+
         # Add the new notification to the beginning of our list
         self.notifications.insert(0, notification)
-        
+
         # Display the message in the widget
         notification.show_message(message, is_error)
-        
+
         # Reposition all notifications to stack them correctly
         self.reposition_notifications()
 
@@ -131,7 +136,7 @@ class NotificationManager:
         except ValueError:
             # Widget might have already been removed, so we can ignore it
             pass
-        
+
         # Reposition the remaining notifications
         self.reposition_notifications()
 
@@ -144,7 +149,7 @@ class NotificationManager:
             return
 
         parent_rect = self.parent.geometry()
-        
+
         # Calculate the height of the status bar, if it exists
         status_bar_height = 0
         if hasattr(self.parent, 'statusBar') and self.parent.statusBar():
@@ -152,17 +157,17 @@ class NotificationManager:
 
         # Initial Y position for the newest (top) notification
         y = parent_rect.height() - status_bar_height - self.margin
-        
+
         # Iterate through notifications and place them
         for notification in self.notifications:
             # Adjust Y position based on widget height
             y -= notification.height()
-            
+
             # Calculate X position
             x = parent_rect.width() - notification.width() - self.margin
-            
+
             notification.move(x, y)
-            
+
             # Add spacing for the next notification above it
             y -= self.spacing
 # pgAdmin-style Export Dialog with Tabs
@@ -1178,6 +1183,13 @@ class MainWindow(QMainWindow):
         elif depth == 3:
             conn_data = item.data(Qt.ItemDataRole.UserRole)
             if conn_data:
+                # *** NEW ACTION ADDED HERE ***
+                view_details_action = QAction("View Details", self)
+                view_details_action.triggered.connect(
+                    lambda: self.view_connection_details(item))
+                menu.addAction(view_details_action)
+                menu.addSeparator()
+
                 if conn_data.get("db_path"):
                     edit_action = QAction("Edit Connection", self)
                     edit_action.triggered.connect(lambda: self.edit_item(item))
@@ -1187,10 +1199,246 @@ class MainWindow(QMainWindow):
                     edit_action.triggered.connect(
                         lambda: self.edit_pg_item(item))
                     menu.addAction(edit_action)
+
                 delete_action = QAction("Delete Connection", self)
                 delete_action.triggered.connect(lambda: self.delete_item(item))
                 menu.addAction(delete_action)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    # --- START OF NEW METHODS FOR VIEWING CONNECTION DETAILS ---
+
+    def view_connection_details(self, item):
+        """Determines connection type and shows the appropriate details dialog."""
+        conn_data = item.data(Qt.ItemDataRole.UserRole)
+        if not conn_data:
+            return
+
+        if conn_data.get("host"):  # PostgreSQL
+            self.show_postgres_details_dialog(conn_data)
+        elif conn_data.get("db_path"):  # SQLite
+            self.show_sqlite_details_dialog(conn_data)
+
+    def show_sqlite_details_dialog(self, conn_data):
+        """Shows a dialog with details for an SQLite connection."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"SQLite Details: {conn_data['name']}")
+        dialog.setMinimumSize(500, 400)
+
+        main_layout = QVBoxLayout(dialog)
+
+        # Connection Info
+        form_layout = QFormLayout()
+        form_layout.addRow("Database Name:", QLabel(
+            conn_data.get("name", "N/A")))
+        form_layout.addRow("Database Path:", QLabel(
+            conn_data.get("db_path", "N/A")))
+
+        main_layout.addLayout(form_layout)
+
+        # Schema Info
+        schema_group = QGroupBox("Schema (Tables and Columns)")
+        schema_layout = QVBoxLayout(schema_group)
+        main_layout.addWidget(schema_group)
+
+        tree_view = QTreeView()
+        tree_view.setHeaderHidden(True)
+        model = QStandardItemModel()
+        tree_view.setModel(model)
+        schema_layout.addWidget(tree_view)
+
+        try:
+            conn = sqlite.connect(conn_data['db_path'])
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+            tables = cursor.fetchall()
+
+            for table_name_tuple in tables:
+                table_name = table_name_tuple[0]
+                table_item = QStandardItem(
+                    QIcon("assets/table_icon.png"), table_name)
+                table_item.setEditable(False)
+
+                cursor.execute(f'PRAGMA table_info("{table_name}");')
+                columns = cursor.fetchall()
+                for col in columns:
+                    col_name = col[1]
+                    col_type = col[2]
+                    not_null = "NOT NULL" if col[3] else ""
+                    pk = "PK" if col[5] else ""
+                    col_str = f"{col_name} ({col_type}) {not_null} {pk}".strip(
+                    )
+                    col_item = QStandardItem(col_str)
+                    col_item.setEditable(False)
+                    table_item.appendRow(col_item)
+                model.appendRow(table_item)
+
+            conn.close()
+        except Exception as e:
+            model.appendRow(QStandardItem(f"Error loading schema: {e}"))
+
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(dialog.accept)
+        main_layout.addWidget(ok_button, alignment=Qt.AlignmentFlag.AlignRight)
+
+        dialog.exec()
+
+    def show_postgres_details_dialog(self, conn_data):
+        """Shows a dialog with details for a PostgreSQL connection."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"PostgreSQL Details: {conn_data['name']}")
+        dialog.setMinimumSize(600, 500)
+
+        main_layout = QVBoxLayout(dialog)
+        tab_widget = QTabWidget()
+        main_layout.addWidget(tab_widget)
+
+        # --- Database Connection and Data Fetching ---
+        owner = "N/A"
+        schemas = []
+        all_columns = []
+        all_constraints = []
+
+        try:
+            conn = db.create_postgres_connection(
+                host=conn_data["host"], database=conn_data["database"],
+                user=conn_data["user"], password=conn_data["password"],
+                port=int(conn_data["port"])
+            )
+            cursor = conn.cursor()
+
+            # Fetch Owner
+            cursor.execute(
+                "SELECT pg_catalog.pg_get_userbyid(d.datdba) FROM pg_catalog.pg_database d WHERE d.datname = %s;", (conn_data['database'],))
+            owner_result = cursor.fetchone()
+            if owner_result:
+                owner = owner_result[0]
+
+            # Fetch Schemas
+            cursor.execute(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast') ORDER BY schema_name;")
+            schemas = [s[0] for s in cursor.fetchall()]
+
+            # --- *** MODIFIED AND CORRECTED QUERY *** ---
+            # Fetch Columns for all tables in user schemas using a robust LEFT JOIN
+            if schemas:  # Only run if there are schemas to query
+                column_query = """
+                    SELECT
+                        c.table_schema,
+                        c.table_name,
+                        c.column_name,
+                        c.data_type,
+                        c.is_nullable,
+                        CASE WHEN pk.column_name IS NOT NULL THEN 'Yes' ELSE 'No' END AS is_primary_key
+                    FROM
+                        information_schema.columns AS c
+                    LEFT JOIN (
+                        SELECT
+                            kcu.table_schema,
+                            kcu.table_name,
+                            kcu.column_name
+                        FROM
+                            information_schema.table_constraints AS tc
+                        JOIN information_schema.key_column_usage AS kcu
+                            ON tc.constraint_name = kcu.constraint_name
+                            AND tc.table_schema = kcu.table_schema
+                        WHERE
+                            tc.constraint_type = 'PRIMARY KEY'
+                    ) AS pk
+                        ON c.table_schema = pk.table_schema
+                        AND c.table_name = pk.table_name
+                        AND c.column_name = pk.column_name
+                    WHERE
+                        c.table_schema = ANY(%s)
+                    ORDER BY
+                        c.table_schema,
+                        c.table_name,
+                        c.ordinal_position;
+                """
+                cursor.execute(column_query, (schemas,))
+                all_columns = cursor.fetchall()
+
+                # Fetch Constraints
+                cursor.execute("""
+                    SELECT
+                        tc.constraint_name,
+                        tc.table_schema || '.' || tc.table_name as table_full_name,
+                        string_agg(kcu.column_name, ', ')
+                    FROM
+                        information_schema.table_constraints AS tc
+                    JOIN information_schema.key_column_usage AS kcu
+                        ON tc.constraint_name = kcu.constraint_name
+                    WHERE tc.table_schema = ANY(%s)
+                    GROUP BY tc.constraint_name, table_full_name ORDER BY table_full_name;
+                """, (schemas,))
+                all_constraints = cursor.fetchall()
+
+            conn.close()
+        except Exception as e:
+            QMessageBox.critical(self, "Connection Error",
+                                 f"Failed to fetch database details: {e}")
+            return
+
+        # --- Tab 1: General ---
+        general_tab = QWidget()
+        form_layout = QFormLayout(general_tab)
+        form_layout.addRow("Connection Name:", QLabel(
+            conn_data.get("name", "N/A")))
+        form_layout.addRow("Owner:", QLabel(owner))
+        form_layout.addRow("Schemas:", QLabel(
+            ", ".join(schemas) or "No user schemas found"))
+        tab_widget.addTab(general_tab, "General")
+
+        # --- Tab 2: Columns ---
+        columns_tab = QWidget()
+        columns_layout = QVBoxLayout(columns_tab)
+        columns_table = QTableView()
+        columns_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers)
+        columns_model = QStandardItemModel()
+        columns_model.setHorizontalHeaderLabels(
+            ["Schema", "Table", "Name", "Data Type", "Not Null", "Primary Key"])
+        for col in all_columns:
+            items = [
+                QStandardItem(str(col[0])),  # schema
+                QStandardItem(str(col[1])),  # table
+                QStandardItem(str(col[2])),  # column name
+                QStandardItem(str(col[3])),  # data type
+                QStandardItem("No" if col[4] == 'YES' else "Yes"),  # Not Null
+                QStandardItem(str(col[5]))     # Primary Key ('Yes' or 'No')
+            ]
+            columns_model.appendRow(items)
+        columns_table.setModel(columns_model)
+        columns_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents)
+        columns_layout.addWidget(columns_table)
+        tab_widget.addTab(columns_tab, "Columns")
+
+        # --- Tab 3: Constraints ---
+        constraints_tab = QWidget()
+        constraints_layout = QVBoxLayout(constraints_tab)
+        constraints_table = QTableView()
+        constraints_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers)
+        constraints_model = QStandardItemModel()
+        constraints_model.setHorizontalHeaderLabels(
+            ["Name", "Table", "Columns"])
+        for const in all_constraints:
+            items = [QStandardItem(str(c)) for c in const]
+            constraints_model.appendRow(items)
+        constraints_table.setModel(constraints_model)
+        constraints_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents)
+        constraints_layout.addWidget(constraints_table)
+        tab_widget.addTab(constraints_tab, "Constraints")
+
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(dialog.accept)
+        main_layout.addWidget(ok_button, alignment=Qt.AlignmentFlag.AlignRight)
+
+        dialog.exec()
+
+    # --- END OF NEW METHODS ---
 
     def add_subcategory(self, parent_item):
         name, ok = QInputDialog.getText(self, "New Group", "Group name:")
@@ -1352,30 +1600,26 @@ class MainWindow(QMainWindow):
     def update_timer_label(self, label, tab):
         if not label or tab not in self.tab_timers:
             return
-        
+
         elapsed_seconds = time.time() - self.tab_timers[tab]["start_time"]
 
-   
         minutes, seconds_with_ms = divmod(elapsed_seconds, 60)
         hours, minutes = divmod(minutes, 60)
 
-   
         seconds_int = int(seconds_with_ms)
         milliseconds = int((seconds_with_ms - seconds_int) * 1000)
 
-   
         time_str = f"{hours:02.0f}:{minutes:02.0f}:{seconds_int:02d}.{milliseconds:03d}"
-    
+
         label.setText(f"Running... {time_str}")
         # elapsed = time.time() - self.tab_timers[tab]["start_time"]
         # label.setText(f"Running... {elapsed:.1f} sec")
 
-    
     def format_duration_ms(self, total_seconds):
         """Converts seconds into HH:MM:SS.ms format. This function is well-written."""
         if total_seconds is None:
-           return "00:00:00.000"
-    
+            return "00:00:00.000"
+
         seconds_int = int(total_seconds)
         milliseconds = int((total_seconds - seconds_int) * 1000)
 
@@ -1383,7 +1627,6 @@ class MainWindow(QMainWindow):
         hours, minutes = divmod(minutes, 60)
 
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
-
 
     def handle_query_error(self, target_tab, error_message):
         if target_tab in self.tab_timers:
@@ -1428,18 +1671,17 @@ class MainWindow(QMainWindow):
 
     def handle_query_result(self, target_tab, conn_data, query, results, columns, row_count, elapsed_time, is_select_query):
         if target_tab in self.tab_timers:
-           self.tab_timers[target_tab]["timer"].stop()
-           self.tab_timers[target_tab]["timeout_timer"].stop()
-           del self.tab_timers[target_tab]
-    
+            self.tab_timers[target_tab]["timer"].stop()
+            self.tab_timers[target_tab]["timeout_timer"].stop()
+            del self.tab_timers[target_tab]
+
         self.save_query_to_history(
-             conn_data, query, "Success", row_count, elapsed_time)
-    
+            conn_data, query, "Success", row_count, elapsed_time)
+
         table_view = target_tab.findChild(QTableView, "result_table")
         message_view = target_tab.findChild(QTextEdit, "message_view")
         tab_status_label = target_tab.findChild(QLabel, "tab_status_label")
-    
-   
+
         formatted_time = self.format_duration_ms(elapsed_time)
 
         if is_select_query:
@@ -1448,26 +1690,24 @@ class MainWindow(QMainWindow):
             for row in results:
                 model.appendRow([QStandardItem(str(cell)) for cell in row])
             table_view.setModel(model)
-        
-       
+
             msg = f"Query executed successfully.\n\nTotal rows: {row_count}\nTime: {formatted_time}"
             status = f"Query executed successfully | Total rows: {row_count} | Query complete {formatted_time}"
         else:
             table_view.setModel(QStandardItemModel())
-        
-       
+
             msg = f"Command executed successfully.\n\nRows affected: {row_count}\nTime: {formatted_time}"
             status = f"Command executed successfully | Rows affected: {row_count} | Query complete {formatted_time}"
-    
+
         message_view.setText(msg)
         tab_status_label.setText(status)
         self.status_message_label.setText("Ready")
         self.stop_spinner(target_tab, success=True)
-    
+
         if target_tab in self.running_queries:
             del self.running_queries[target_tab]
         if not self.running_queries:
-           self.cancel_action.setEnabled(False)
+            self.cancel_action.setEnabled(False)
 
     def handle_query_timeout(self, tab, runnable):
         if self.running_queries.get(tab) is runnable:
@@ -1873,26 +2113,26 @@ class MainWindow(QMainWindow):
         self.thread_pool.start(runnable)
 
     def handle_count_result(self, conn_data, query, results, columns, row_count, elapsed_time, is_select_query):
-      try:
-          if results and len(results) > 0 and len(results[0]) > 0:
-              count = results[0][0]
-              message = f"Table rows counted: {count}"
-              #  CHANGE: Use the manager to show the message.
-              self.notification_manager.show_message(message)
-              self.status_message_label.setText(
-                  f"Successfully counted rows in {elapsed_time:.2f} sec."
-              )
-          else:
-              self.handle_count_error("Could not retrieve count.")
-      except Exception as e:
-          self.handle_count_error(str(e))
+        try:
+            if results and len(results) > 0 and len(results[0]) > 0:
+                count = results[0][0]
+                message = f"Table rows counted: {count}"
+                #  CHANGE: Use the manager to show the message.
+                self.notification_manager.show_message(message)
+                self.status_message_label.setText(
+                    f"Successfully counted rows in {elapsed_time:.2f} sec."
+                )
+            else:
+                self.handle_count_error("Could not retrieve count.")
+        except Exception as e:
+            self.handle_count_error(str(e))
 
     def handle_count_error(self, error_message):
-      # CHANGE: Use the manager to show the error message.
-      self.notification_manager.show_message(
-          f"Error: {error_message}", is_error=True
-      )
-      self.status_message_label.setText("Failed to count rows.")
+        # CHANGE: Use the manager to show the error message.
+        self.notification_manager.show_message(
+            f"Error: {error_message}", is_error=True
+        )
+        self.status_message_label.setText("Failed to count rows.")
 
         # end
 
