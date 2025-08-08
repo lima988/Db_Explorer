@@ -29,17 +29,19 @@ from dialogs.sqlite_dialog import SQLiteConnectionDialog
 # db Importing modules
 import dialogs.db as db
 # count rows
-
-
 class NotificationWidget(QWidget):
     """
-    A custom widget for displaying pgAdmin-style notifications.
+    A custom widget for displaying a single notification.
+    The position is managed by the NotificationManager.
     """
+    #  CHANGE: Add a signal that is emitted when the widget is closed by the user.
+    closed = pyqtSignal(QWidget)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | Qt.WindowType.ToolTip)
+            Qt.WindowType.FramelessWindowHint | Qt.WindowType.ToolTip
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setObjectName("notificationWidget")
 
@@ -52,18 +54,18 @@ class NotificationWidget(QWidget):
         self.close_button = QPushButton("✕")
         self.close_button.setObjectName("notificationCloseButton")
         self.close_button.setFixedSize(20, 20)
-        self.close_button.clicked.connect(self.hide)
+        #  CHANGE: Connect the close button to a method that emits our custom signal.
+        self.close_button.clicked.connect(self.close_widget)
 
         layout.addWidget(self.icon_label)
         layout.addWidget(self.message_label)
         layout.addStretch()
         layout.addWidget(self.close_button)
 
-        self.hide_timer = QTimer(self)
-        self.hide_timer.setSingleShot(True)
-        self.hide_timer.timeout.connect(self.hide)
-
-    def show_message(self, message, is_error=False, duration=5000):
+    def show_message(self, message, is_error=False):
+        """
+        Sets the content of the notification.
+        """
         self.message_label.setText(message)
 
         if is_error:
@@ -71,27 +73,98 @@ class NotificationWidget(QWidget):
             icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxCritical)
         else:
             self.setProperty("isError", False)
+            # A better icon for success/info
             icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
 
         self.icon_label.setPixmap(icon.pixmap(16, 16))
 
-        # Refresh style
+        # Refresh style to apply properties
         self.style().unpolish(self)
         self.style().polish(self)
 
-        self.show()
         self.adjustSize()
+        self.show()
 
-        # Position at bottom-right of parent
-        if self.parentWidget():
-            parent_rect = self.parentWidget().geometry()
-            status_bar_height = self.parentWidget().statusBar().height(
-            ) if hasattr(self.parentWidget(), 'statusBar') else 0
-            x = parent_rect.width() - self.width() - 15
-            y = parent_rect.height() - self.height() - status_bar_height - 15
-            self.move(x, y)
+    def close_widget(self):
+        """
+        Emits the 'closed' signal and then closes the widget.
+        """
+        #  CHANGE: Emit signal before closing, so the manager can catch it.
+        self.closed.emit(self)
+        self.close()
+class NotificationManager:
+    """
+    Manages the creation, stacking, and display of multiple NotificationWidgets.
+    """
+    def __init__(self, parent_widget):
+        self.parent = parent_widget
+        self.notifications = []  # List to keep track of active notifications
+        self.spacing = 10
+        self.margin = 15
 
-        self.hide_timer.start(duration)
+    def show_message(self, message, is_error=False):
+        """
+        Creates and shows a new notification.
+        """
+        # Create a new notification widget instance
+        notification = NotificationWidget(self.parent)
+        
+        # Connect its 'closed' signal to our handler
+        notification.closed.connect(self.on_notification_closed)
+        
+        # Add the new notification to the beginning of our list
+        self.notifications.insert(0, notification)
+        
+        # Display the message in the widget
+        notification.show_message(message, is_error)
+        
+        # Reposition all notifications to stack them correctly
+        self.reposition_notifications()
+
+    def on_notification_closed(self, notification_widget):
+        """
+        Slot to handle a notification being closed.
+        """
+        try:
+            # Remove the closed widget from our list
+            self.notifications.remove(notification_widget)
+        except ValueError:
+            # Widget might have already been removed, so we can ignore it
+            pass
+        
+        # Reposition the remaining notifications
+        self.reposition_notifications()
+
+    def reposition_notifications(self):
+        """
+        Arranges all active notifications in a stack at the bottom-right
+        of the parent widget.
+        """
+        if not self.parent:
+            return
+
+        parent_rect = self.parent.geometry()
+        
+        # Calculate the height of the status bar, if it exists
+        status_bar_height = 0
+        if hasattr(self.parent, 'statusBar') and self.parent.statusBar():
+            status_bar_height = self.parent.statusBar().height()
+
+        # Initial Y position for the newest (top) notification
+        y = parent_rect.height() - status_bar_height - self.margin
+        
+        # Iterate through notifications and place them
+        for notification in self.notifications:
+            # Adjust Y position based on widget height
+            y -= notification.height()
+            
+            # Calculate X position
+            x = parent_rect.width() - notification.width() - self.margin
+            
+            notification.move(x, y)
+            
+            # Add spacing for the next notification above it
+            y -= self.spacing
 # pgAdmin-style Export Dialog with Tabs
 
 
@@ -419,8 +492,9 @@ class MainWindow(QMainWindow):
         self.add_tab()  # Add initial worksheet
         self.main_splitter.setSizes([280, 920])
         # count_rows
-        self.notification_widget = NotificationWidget(self)
-        self.notification_widget.hide()
+        # self.notification_widget = NotificationWidget(self)
+        # self.notification_widget.hide()
+        self.notification_manager = NotificationManager(self)
         self._apply_styles()
 
     # <<< MODIFIED >>> This method now checks if the tab already exists.
@@ -759,11 +833,11 @@ class MainWindow(QMainWindow):
             #change for count
             /* ADD THESE NEW STYLES FOR NOTIFICATION WIDGET */
             #notificationWidget {{
-                background-color: #d4edda; /* Green for success */
-                color: #155724;
+                background-color: #3fb55a; /* Green for success */
+                color: #3fb55a;
                 border: 1px solid #c3e6cb;
-                border-radius: 5px;
-                font-size: 9pt;
+                border-radius: 1px;
+                font-size: 10pt;
             }}
             #notificationWidget[isError="true"] {{
                 background-color: #f8d7da; /* Red for error */
@@ -1799,22 +1873,26 @@ class MainWindow(QMainWindow):
         self.thread_pool.start(runnable)
 
     def handle_count_result(self, conn_data, query, results, columns, row_count, elapsed_time, is_select_query):
-        try:
-            if results and len(results) > 0 and len(results[0]) > 0:
-                count = results[0][0]
-                message = f"Table rows counted: {count}"
-                self.notification_widget.show_message(message)
-                self.status_message_label.setText(
-                    f"Successfully counted rows in {elapsed_time:.2f} sec.")
-            else:
-                self.handle_count_error("Could not retrieve count.")
-        except Exception as e:
-            self.handle_count_error(str(e))
+      try:
+          if results and len(results) > 0 and len(results[0]) > 0:
+              count = results[0][0]
+              message = f"Table rows counted: {count}"
+              #  CHANGE: Use the manager to show the message.
+              self.notification_manager.show_message(message)
+              self.status_message_label.setText(
+                  f"Successfully counted rows in {elapsed_time:.2f} sec."
+              )
+          else:
+              self.handle_count_error("Could not retrieve count.")
+      except Exception as e:
+          self.handle_count_error(str(e))
 
     def handle_count_error(self, error_message):
-        self.notification_widget.show_message(
-            f"Error: {error_message}", is_error=True)
-        self.status_message_label.setText("Failed to count rows.")
+      # CHANGE: Use the manager to show the error message.
+      self.notification_manager.show_message(
+          f"Error: {error_message}", is_error=True
+      )
+      self.status_message_label.setText("Failed to count rows.")
 
         # end
 

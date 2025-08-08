@@ -22,13 +22,13 @@ class SQLiteConnectionDialog(QDialog):
 
         self.browse_btn = QPushButton("Browse")
         self.browse_btn.clicked.connect(self.browse_file)
-        self.create_btn = QPushButton("Create New DB")
-        self.create_btn.clicked.connect(self.create_new_db)
+        # self.create_btn = QPushButton("Create New DB")
+        # self.create_btn.clicked.connect(self.create_new_db)
 
         path_layout = QHBoxLayout()
         path_layout.addWidget(self.browse_btn)
-        path_layout.addWidget(self.create_btn)
-        form.addRow("", path_layout)
+        #path_layout.addWidget(self.create_btn)
+        #form.addRow("", path_layout)
 
         if is_editing:
             self.name_input.setText(self.conn_data.get("name", ""))
@@ -55,18 +55,18 @@ class SQLiteConnectionDialog(QDialog):
         if file_path:
             self.path_input.setText(file_path)
 
-    def create_new_db(self):
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "Create New SQLite DB", "", "SQLite Database (*.db *.sqlite *.sqlite3)")
-        if file_path:
-            try:
-                conn = sqlite.connect(file_path)
-                conn.close()
-                self.path_input.setText(file_path)
-                QMessageBox.information(
-                    self, "Success", f"Database created successfully at:\n{file_path}")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Could not create database:\n{e}")
+    # def create_new_db(self):
+    #     file_path, _ = QFileDialog.getSaveFileName(
+    #         self, "Create New SQLite DB", "", "SQLite Database (*.db *.sqlite *.sqlite3)")
+    #     if file_path:
+    #         try:
+    #             conn = sqlite.connect(file_path)
+    #             conn.close()
+    #             self.path_input.setText(file_path)
+    #             QMessageBox.information(
+    #                 self, "Success", f"Database created successfully at:\n{file_path}")
+    #         except Exception as e:
+    #             QMessageBox.critical(self, "Error", f"Could not create database:\n{e}")
 
     def save_connection(self):
         if not self.name_input.text().strip() or not self.path_input.text().strip():
