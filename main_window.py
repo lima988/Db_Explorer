@@ -1278,39 +1278,38 @@ class MainWindow(QMainWindow):
     def update_timer_label(self, label, tab):
         if not label or tab not in self.tab_timers:
             return
-        elapsed = time.time() - self.tab_timers[tab]["start_time"]
-        label.setText(f"Running... {elapsed:.1f} sec")
+        
+        elapsed_seconds = time.time() - self.tab_timers[tab]["start_time"]
 
-    def handle_query_result(self, target_tab, conn_data, query, results, columns, row_count, elapsed_time, is_select_query):
-        if target_tab in self.tab_timers:
-            self.tab_timers[target_tab]["timer"].stop()
-            self.tab_timers[target_tab]["timeout_timer"].stop()
-            del self.tab_timers[target_tab]
-        self.save_query_to_history(
-            conn_data, query, "Success", row_count, elapsed_time)
-        table_view = target_tab.findChild(QTableView, "result_table")
-        message_view = target_tab.findChild(QTextEdit, "message_view")
-        tab_status_label = target_tab.findChild(QLabel, "tab_status_label")
-        if is_select_query:
-            model = QStandardItemModel()
-            model.setHorizontalHeaderLabels(columns)
-            for row in results:
-                model.appendRow([QStandardItem(str(cell)) for cell in row])
-            table_view.setModel(model)
-            msg = f"Query executed successfully.\n\nTotal rows: {row_count}\nTime: {elapsed_time:.2f} sec"
-            status = f"Query executed successfully | Total rows: {row_count} | Time: {elapsed_time:.2f} sec"
-        else:
-            table_view.setModel(QStandardItemModel())
-            msg = f"Command executed successfully.\n\nRows affected: {row_count}\nTime: {elapsed_time:.2f} sec"
-            status = f"Command executed successfully | Rows affected: {row_count} | Time: {elapsed_time:.2f} sec"
-        message_view.setText(msg)
-        tab_status_label.setText(status)
-        self.status_message_label.setText("Ready")
-        self.stop_spinner(target_tab, success=True)
-        if target_tab in self.running_queries:
-            del self.running_queries[target_tab]
-        if not self.running_queries:
-            self.cancel_action.setEnabled(False)
+   
+        minutes, seconds_with_ms = divmod(elapsed_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+
+   
+        seconds_int = int(seconds_with_ms)
+        milliseconds = int((seconds_with_ms - seconds_int) * 1000)
+
+   
+        time_str = f"{hours:02.0f}:{minutes:02.0f}:{seconds_int:02d}.{milliseconds:03d}"
+    
+        label.setText(f"Running... {time_str}")
+        # elapsed = time.time() - self.tab_timers[tab]["start_time"]
+        # label.setText(f"Running... {elapsed:.1f} sec")
+
+    
+    def format_duration_ms(self, total_seconds):
+        """Converts seconds into HH:MM:SS.ms format. This function is well-written."""
+        if total_seconds is None:
+           return "00:00:00.000"
+    
+        seconds_int = int(total_seconds)
+        milliseconds = int((total_seconds - seconds_int) * 1000)
+
+        minutes, seconds = divmod(seconds_int, 60)
+        hours, minutes = divmod(minutes, 60)
+
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+
 
     def handle_query_error(self, target_tab, error_message):
         if target_tab in self.tab_timers:
@@ -1352,6 +1351,49 @@ class MainWindow(QMainWindow):
                     buttons[0].setChecked(False)
                     buttons[1].setChecked(True)
                     buttons[2].setChecked(False)
+
+    def handle_query_result(self, target_tab, conn_data, query, results, columns, row_count, elapsed_time, is_select_query):
+        if target_tab in self.tab_timers:
+           self.tab_timers[target_tab]["timer"].stop()
+           self.tab_timers[target_tab]["timeout_timer"].stop()
+           del self.tab_timers[target_tab]
+    
+        self.save_query_to_history(
+             conn_data, query, "Success", row_count, elapsed_time)
+    
+        table_view = target_tab.findChild(QTableView, "result_table")
+        message_view = target_tab.findChild(QTextEdit, "message_view")
+        tab_status_label = target_tab.findChild(QLabel, "tab_status_label")
+    
+   
+        formatted_time = self.format_duration_ms(elapsed_time)
+
+        if is_select_query:
+            model = QStandardItemModel()
+            model.setHorizontalHeaderLabels(columns)
+            for row in results:
+                model.appendRow([QStandardItem(str(cell)) for cell in row])
+            table_view.setModel(model)
+        
+       
+            msg = f"Query executed successfully.\n\nTotal rows: {row_count}\nTime: {formatted_time}"
+            status = f"Query executed successfully | Total rows: {row_count} | Query complete {formatted_time}"
+        else:
+            table_view.setModel(QStandardItemModel())
+        
+       
+            msg = f"Command executed successfully.\n\nRows affected: {row_count}\nTime: {formatted_time}"
+            status = f"Command executed successfully | Rows affected: {row_count} | Query complete {formatted_time}"
+    
+        message_view.setText(msg)
+        tab_status_label.setText(status)
+        self.status_message_label.setText("Ready")
+        self.stop_spinner(target_tab, success=True)
+    
+        if target_tab in self.running_queries:
+            del self.running_queries[target_tab]
+        if not self.running_queries:
+           self.cancel_action.setEnabled(False)
 
     def handle_query_timeout(self, tab, runnable):
         if self.running_queries.get(tab) is runnable:
@@ -1602,15 +1644,15 @@ class MainWindow(QMainWindow):
         table_name = item.text()
         menu = QMenu()
         view_menu = menu.addMenu("View/Edit Data")
-        query_all_action = QAction("all rows", self)
+        query_all_action = QAction("All Rows", self)
         query_all_action.triggered.connect(lambda: self.query_table_rows(
             item_data, table_name, limit=None, execute_now=True))
         view_menu.addAction(query_all_action)
-        preview_100_action = QAction("first 100 rows", self)
+        preview_100_action = QAction("First 100 Rows", self)
         preview_100_action.triggered.connect(lambda: self.query_table_rows(
             item_data, table_name, limit=100, execute_now=True))
         view_menu.addAction(preview_100_action)
-        last_100_action = QAction("last 100 rows", self)
+        last_100_action = QAction("Last 100 Rows", self)
         last_100_action.triggered.connect(lambda: self.query_table_rows(
             item_data, table_name, limit=100, order='desc', execute_now=True))
         view_menu.addAction(last_100_action)
