@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTreeView, QTabWidget,
     QSplitter, QLineEdit, QTextEdit, QComboBox, QTableView, QVBoxLayout, QWidget, QStatusBar, QToolBar, QFileDialog,
     QSizePolicy, QPushButton, QInputDialog, QMessageBox, QMenu, QAbstractItemView, QDialog, QFormLayout, QHBoxLayout,
-    QStackedWidget, QLabel, QGroupBox, QDialogButtonBox, QCheckBox, QRadioButton, QStyle, QHeaderView
+    QStackedWidget, QLabel, QGroupBox, QDialogButtonBox, QCheckBox, QRadioButton, QStyle, QHeaderView, QFrame
 )
 from PyQt6.QtGui import (
     QAction, QIcon, QStandardItemModel, QStandardItem, QFont, QMovie, QDesktopServices, QColor, QBrush
@@ -275,6 +275,606 @@ class ExportDialog(QDialog):
             "delimiter": delimiter,
             "quote": self.quote_edit.text()
         }
+
+
+class TablePropertiesDialog(QDialog):
+    def __init__(self, item_data, table_name, parent=None):
+        super().__init__(parent)
+        self.item_data = item_data
+        self.table_name = table_name
+        self.conn_data = self.item_data['conn_data']
+        self.db_type = self.item_data['db_type']
+        self.schema_name = self.item_data.get('schema_name')
+        self.qualified_table_name = f"{self.schema_name}.{self.table_name}"
+
+        self.setWindowTitle(f"Properties - {self.table_name}")
+        self.setMinimumSize(700, 500)
+
+        main_layout = QVBoxLayout(self)
+        tab_widget = QTabWidget()
+        main_layout.addWidget(tab_widget)
+
+        try:
+            general_tab = self._create_general_tab()
+            columns_tab = self._create_columns_tab()
+            constraints_tab = self._create_constraints_tab()
+
+            tab_widget.addTab(general_tab, "General")
+            tab_widget.addTab(columns_tab, "Columns")
+            tab_widget.addTab(constraints_tab, "Constraints")
+        except Exception as e:
+            error_label = QLabel(f"Failed to load table properties:\n{e}")
+            error_label.setWordWrap(True)
+            main_layout.addWidget(error_label)
+
+        button_box = QHBoxLayout()
+        button_box.addStretch()
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(self.accept)
+        button_box.addWidget(ok_button)
+        main_layout.addLayout(button_box)
+
+    def _create_general_tab(self):
+        widget = QWidget()
+        layout = QFormLayout(widget)
+        layout.setSpacing(10)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+
+        properties = {}
+        if self.db_type == 'postgres':
+            properties = self._fetch_postgres_general_properties()
+        else:
+            properties = self._fetch_sqlite_general_properties()
+
+        self.name_field = QLineEdit(properties.get("Name", ""))
+        self.name_field.setReadOnly(True)
+        self.owner_combo = QComboBox()
+        self.schema_field = QLineEdit(properties.get("Schema", ""))
+        self.schema_field.setReadOnly(True)
+        self.tablespace_combo = QComboBox()
+        self.partitioned_check = QCheckBox()
+        self.comment_edit = QTextEdit(properties.get("Comment", ""))
+
+        if self.db_type == 'postgres':
+            if "all_owners" in properties:
+                self.owner_combo.addItems(properties.get("all_owners", []))
+            if "all_tablespaces" in properties:
+                self.tablespace_combo.addItems(
+                    properties.get("all_tablespaces", []))
+            self.owner_combo.setCurrentText(properties.get("Owner", ""))
+            self.tablespace_combo.setCurrentText(
+                properties.get("Table Space", "default"))
+            self.partitioned_check.setChecked(
+                properties.get("Is Partitioned", False))
+        else:
+            self.owner_combo.setEnabled(False)
+            self.tablespace_combo.setEnabled(False)
+            self.partitioned_check.setEnabled(False)
+
+        layout.addRow("Name:", self.name_field)
+        layout.addRow("Owner:", self.owner_combo)
+        layout.addRow("Schema:", self.schema_field)
+        layout.addRow("Tablespace:", self.tablespace_combo)
+        layout.addRow("Partitioned table?:", self.partitioned_check)
+        layout.addRow("Comment:", self.comment_edit)
+
+        return widget
+
+    def _create_tag_button(self, text):
+        """Creates a styled QPushButton that looks like a tag."""
+        button = QPushButton(f"{text}  ×")
+        button.setStyleSheet("""
+            QPushButton {
+                background-color: #e1e1e1;
+                border: 1px solid #c1c1c1;
+                border-radius: 4px;
+                padding: 3px 6px;
+                font-size: 9pt;
+                text-align: center;
+            }
+            QPushButton:hover {
+                background-color: #d1d1d1;
+            }
+            QPushButton:pressed {
+                background-color: #c1c1c1;
+            }
+        """)
+        button.clicked.connect(lambda: self._remove_inheritance_tag(button))
+        return button
+
+    def _remove_inheritance_tag(self, button_to_remove):
+        """Removes an inheritance tag from the UI."""
+        table_name = button_to_remove.text().split("  ×")[0]
+        button_to_remove.deleteLater()
+
+        current_items = [self.add_parent_combo.itemText(
+            i) for i in range(self.add_parent_combo.count())]
+        if table_name not in current_items:
+            self.add_parent_combo.addItem(table_name)
+            self.add_parent_combo.model().sort(0)
+
+    def _add_inheritance_tag(self, index):
+        """Adds a new inheritance tag to the UI when selected from the combobox."""
+        table_to_add = self.add_parent_combo.itemText(index)
+        if not table_to_add:
+            return
+
+        for i in range(self.inheritance_layout.count()):
+            widget = self.inheritance_layout.itemAt(i).widget()
+            if isinstance(widget, QPushButton) and widget.text().startswith(table_to_add):
+                self.add_parent_combo.setCurrentIndex(0)
+                return
+
+        new_tag = self._create_tag_button(table_to_add)
+        self.inheritance_layout.insertWidget(
+            self.inheritance_layout.indexOf(self.add_parent_combo), new_tag)
+
+        self.add_parent_combo.removeItem(index)
+        self.add_parent_combo.setCurrentIndex(0)
+
+    def _create_columns_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 5, 0, 0)
+
+        # "Inherited from table(s)" section
+        inheritance_group = QGroupBox("Inherited from table(s)")
+        inheritance_frame = QFrame()
+        inheritance_frame.setObjectName("inheritanceFrame")
+        inheritance_frame.setStyleSheet(
+            "#inheritanceFrame { border: 1px solid #a9a9a9; border-radius: 3px; }")
+
+        self.inheritance_layout = QHBoxLayout(inheritance_frame)
+        self.inheritance_layout.setContentsMargins(2, 2, 2, 2)
+        self.inheritance_layout.setSpacing(4)
+
+        group_layout = QVBoxLayout(inheritance_group)
+        group_layout.addWidget(inheritance_frame)
+        layout.addWidget(inheritance_group)
+
+        if self.db_type == 'postgres':
+            inherited_tables = self._fetch_postgres_inheritance()
+            all_tables = self._fetch_all_connection_tables()
+            possible_new_parents = sorted(
+                [t for t in all_tables if t != self.qualified_table_name and t not in inherited_tables])
+
+            for table_name in inherited_tables:
+                tag = self._create_tag_button(table_name)
+                self.inheritance_layout.addWidget(tag)
+
+            self.add_parent_combo = QComboBox()
+            self.add_parent_combo.addItems([""] + possible_new_parents)
+            self.add_parent_combo.setMinimumWidth(150)
+            self.add_parent_combo.setStyleSheet("QComboBox { border: none; }")
+            self.add_parent_combo.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            self.add_parent_combo.activated.connect(self._add_inheritance_tag)
+
+            self.inheritance_layout.addWidget(self.add_parent_combo)
+            self.inheritance_layout.addStretch(0)
+        else:
+            inheritance_group.setEnabled(False)
+
+        # Columns table view
+        columns_group = QGroupBox("Columns")
+        columns_layout = QVBoxLayout(columns_group)
+        layout.addWidget(columns_group)
+        table_view = QTableView()
+        columns_layout.addWidget(table_view)
+        model = QStandardItemModel()
+        model.setHorizontalHeaderLabels(
+            ['', '', 'Name', 'Data type', 'Length/Precision', 'Scale', 'Not NULL?', 'Primary key?', 'Default'])
+        table_view.setModel(model)
+        table_view.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers)
+
+        columns_data = self._fetch_postgres_columns(
+        ) if self.db_type == 'postgres' else self._fetch_sqlite_columns()
+
+        edit_icon = self.style().standardIcon(
+            QStyle.StandardPixmap.SP_FileDialogDetailedView)
+        delete_icon = self.style().standardIcon(
+            QStyle.StandardPixmap.SP_DialogCloseButton)
+        gray_brush = QBrush(QColor("gray"))
+
+        for row_idx, row_data in enumerate(columns_data):
+            # unpack data: name, type, len, scale, not_null, pk, default, is_local
+            is_local = row_data[7] if self.db_type == 'postgres' else True
+
+            # Create items
+            edit_item = QStandardItem(edit_icon, "")
+            delete_item = QStandardItem(delete_icon, "")
+            name_text = f"{row_data[0]} (inherited)" if not is_local else str(
+                row_data[0])
+            name_item = QStandardItem(name_text)
+            type_item = QStandardItem(str(row_data[1]))
+            len_item = QStandardItem(str(row_data[2]))
+            scale_item = QStandardItem(str(row_data[3]))
+            default_item = QStandardItem(str(row_data[6]))
+            not_null_item = QStandardItem("")
+            pk_item = QStandardItem("")
+
+            all_items = [edit_item, delete_item, name_item, type_item,
+                         len_item, scale_item, not_null_item, pk_item, default_item]
+
+            # Style inherited rows
+            if not is_local:
+                for item in all_items:
+                    item.setForeground(gray_brush)
+                    # Make inherited rows not selectable
+                    flags = item.flags()
+                    flags &= ~Qt.ItemFlag.ItemIsSelectable
+                    item.setFlags(flags)
+
+            edit_item.setEditable(False)
+            delete_item.setEditable(False)
+            not_null_item.setEditable(False)
+            pk_item.setEditable(False)
+
+            model.appendRow(all_items)
+
+            # Checkboxes
+            is_not_null = (row_data[4] == "✔")
+            is_pk = (row_data[5] == "✔")
+            not_null_switch = QCheckBox()
+            not_null_switch.setChecked(is_not_null)
+            not_null_switch.setEnabled(False)
+            pk_switch = QCheckBox()
+            pk_switch.setChecked(is_pk)
+            pk_switch.setEnabled(False)
+
+            for col_idx, switch_widget in [(6, not_null_switch), (7, pk_switch)]:
+                container = QWidget()
+                h_layout = QHBoxLayout(container)
+                h_layout.addWidget(switch_widget)
+                h_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                h_layout.setContentsMargins(0, 0, 0, 0)
+                table_view.setIndexWidget(
+                    model.index(row_idx, col_idx), container)
+
+        table_view.resizeColumnsToContents()
+        table_view.setColumnWidth(0, 28)
+        table_view.setColumnWidth(1, 28)
+        return widget
+
+    def _create_constraints_tab(self):
+        container_widget = QWidget()
+        main_layout = QVBoxLayout(container_widget)
+        main_layout.setContentsMargins(0, 5, 0, 0)
+        constraints_tab_widget = QTabWidget()
+        main_layout.addWidget(constraints_tab_widget)
+
+        constraints_by_type = self._fetch_postgres_constraints(
+        ) if self.db_type == 'postgres' else self._fetch_sqlite_constraints()
+
+        tab_definitions = [
+            ("Primary Key", 'PRIMARY KEY', ['Name', 'Columns']),
+            ("Foreign Key", 'FOREIGN KEY', [
+             'Name', 'Columns', 'Referenced Table', 'Referenced Columns']),
+            ("Check", 'CHECK', ['Name', 'Definition']),
+            ("Unique", 'UNIQUE', ['Name', 'Columns'])
+        ]
+
+        for title, key, headers in tab_definitions:
+            data = constraints_by_type.get(key, [])
+            table_view = QTableView()
+            table_view.setEditTriggers(
+                QAbstractItemView.EditTrigger.NoEditTriggers)
+            table_view.setAlternatingRowColors(True)
+            table_view.horizontalHeader().setStretchLastSection(True)
+
+            model = QStandardItemModel()
+            model.setHorizontalHeaderLabels(headers)
+            table_view.setModel(model)
+
+            for row_data in data:
+                items = [QStandardItem(str(item)) for item in row_data]
+                model.appendRow(items)
+
+            # Center align all items in the table
+            for row in range(model.rowCount()):
+                for col in range(model.columnCount()):
+                    item = model.item(row, col)
+                    if item:
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            table_view.resizeColumnsToContents()
+            constraints_tab_widget.addTab(table_view, title)
+
+        return container_widget
+
+    def _fetch_sqlite_general_properties(self):
+        return {
+            "Name": self.table_name, "Owner": "N/A", "Schema": "main",
+            "Table Space": "N/A", "Comment": "N/A"
+        }
+
+    def _fetch_all_connection_tables(self):
+        """Fetches all tables (schema.table) from the current connection for the inheritance combobox."""
+        tables = []
+        if self.db_type != 'postgres':
+            return tables
+
+        conn = None
+        try:
+            expected_keys = ['host', 'port', 'database', 'user', 'password']
+            pg_conn_data = {key: self.conn_data.get(
+                key) for key in expected_keys}
+            conn = db.create_postgres_connection(**pg_conn_data)
+            cursor = conn.cursor()
+
+            query = """
+                SELECT table_schema || '.' || table_name AS qualified_name
+                FROM information_schema.tables
+                WHERE table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                AND table_type = 'BASE TABLE'
+                ORDER BY table_schema, table_name;
+            """
+            cursor.execute(query)
+            tables = [row[0] for row in cursor.fetchall()]
+
+        except Exception as e:
+            QMessageBox.critical(
+                self, "DB Error", f"Error fetching connection tables:\n{e}")
+        finally:
+            if conn:
+                conn.close()
+        return tables
+
+    def _fetch_postgres_inheritance(self):
+        inherited_from = []
+        conn = None
+        try:
+            expected_keys = ['host', 'port', 'database', 'user', 'password']
+            pg_conn_data = {key: self.conn_data.get(
+                key) for key in expected_keys}
+            conn = db.create_postgres_connection(**pg_conn_data)
+            cursor = conn.cursor()
+            query = """
+                SELECT pn.nspname || '.' || parent.relname AS parent_table
+                FROM pg_inherits
+                JOIN pg_class AS child ON pg_inherits.inhrelid = child.oid
+                JOIN pg_namespace AS cns ON child.relnamespace = cns.oid
+                JOIN pg_class AS parent ON pg_inherits.inhparent = parent.oid
+                JOIN pg_namespace AS pn ON parent.relnamespace = pn.oid
+                WHERE child.relname = %s AND cns.nspname = %s;
+            """
+            cursor.execute(query, (self.table_name, self.schema_name))
+            inherited_from = [row[0] for row in cursor.fetchall()]
+        finally:
+            if conn:
+                conn.close()
+        return inherited_from
+
+    def _fetch_postgres_general_properties(self):
+        props = {"Name": self.table_name, "Schema": self.schema_name}
+        conn = None
+        try:
+            expected_keys = ['host', 'port', 'database', 'user', 'password']
+            pg_conn_data = {key: self.conn_data.get(
+                key) for key in expected_keys}
+            conn = db.create_postgres_connection(**pg_conn_data)
+            cursor = conn.cursor()
+            query = """
+                SELECT u.usename as owner, ts.spcname as tablespace, d.description, c.relispartition
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                LEFT JOIN pg_user u ON u.usesysid = c.relowner
+                LEFT JOIN pg_tablespace ts ON ts.oid = c.reltablespace
+                LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0
+                WHERE n.nspname = %s AND c.relname = %s
+            """
+            cursor.execute(query, (self.schema_name, self.table_name))
+            res = cursor.fetchone()
+            if res:
+                props["Owner"] = res[0] or "N/A"
+                props["Table Space"] = res[1] or "default"
+                props["Comment"] = res[2] or ""
+                props["Is Partitioned"] = res[3]
+
+            cursor.execute(
+                "SELECT rolname FROM pg_roles WHERE rolcanlogin = true ORDER BY rolname;")
+            props["all_owners"] = [row[0] for row in cursor.fetchall()]
+            cursor.execute(
+                "SELECT spcname FROM pg_tablespace ORDER BY spcname;")
+            props["all_tablespaces"] = ["default"] + [row[0]
+                                                      for row in cursor.fetchall()]
+        finally:
+            if conn:
+                conn.close()
+        return props
+
+    def _fetch_sqlite_columns(self):
+        columns = []
+        conn = None
+        try:
+            conn = db.create_sqlite_connection(self.conn_data['db_path'])
+            cursor = conn.cursor()
+            cursor.execute(f'PRAGMA table_info("{self.table_name}");')
+            pk_cols = {row[1] for row in cursor.fetchall() if row[5] > 0}
+            cursor.execute(f'PRAGMA table_info("{self.table_name}");')
+            for row in cursor.fetchall():
+                columns.append([
+                    row[1], row[2], "", "", "✔" if row[3] else "",
+                    "✔" if row[1] in pk_cols else "", row[4] or ""
+                ])
+        finally:
+            if conn:
+                conn.close()
+        return columns
+
+    def _fetch_postgres_columns(self):
+        columns = []
+        conn = None
+        try:
+            expected_keys = ['host', 'port', 'database', 'user', 'password']
+            pg_conn_data = {key: self.conn_data.get(
+                key) for key in expected_keys}
+            conn = db.create_postgres_connection(**pg_conn_data)
+            cursor = conn.cursor()
+
+            pk_query = """
+                SELECT kcu.column_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+                WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = %s AND tc.table_name = %s;
+            """
+            cursor.execute(pk_query, (self.schema_name, self.table_name))
+            pk_columns = {row[0] for row in cursor.fetchall()}
+
+            col_query = """
+                SELECT
+                    c.column_name,
+                    c.udt_name,
+                    c.character_maximum_length,
+                    c.numeric_precision,
+                    c.numeric_scale,
+                    c.is_nullable,
+                    c.column_default,
+                    a.attislocal
+                FROM information_schema.columns AS c
+                JOIN pg_catalog.pg_class AS pc ON c.table_name = pc.relname
+                JOIN pg_catalog.pg_namespace AS pn ON pc.relnamespace = pn.oid AND c.table_schema = pn.nspname
+                JOIN pg_catalog.pg_attribute AS a ON a.attrelid = pc.oid AND a.attname = c.column_name
+                WHERE c.table_schema = %s AND c.table_name = %s AND a.attnum > 0 AND NOT a.attisdropped
+                ORDER BY c.ordinal_position;
+            """
+            cursor.execute(col_query, (self.schema_name, self.table_name))
+            for row in cursor.fetchall():
+                length_precision = row[2] if row[2] is not None else row[3]
+                columns.append([
+                    row[0], row[1], length_precision or "", row[4] or "",
+                    "✔" if row[5] == "NO" else "", "✔" if row[0] in pk_columns else "", row[6] or "",
+                    row[7]  # attislocal
+                ])
+        finally:
+            if conn:
+                conn.close()
+        return columns
+
+    def _fetch_sqlite_constraints(self):
+        constraints = {'PRIMARY KEY': [],
+                       'FOREIGN KEY': [], 'UNIQUE': [], 'CHECK': []}
+        conn = None
+        try:
+            conn = db.create_sqlite_connection(self.conn_data['db_path'])
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{self.table_name}';")
+            sql_def_row = cursor.fetchone()
+            sql_def = sql_def_row[0] if sql_def_row else ""
+
+            cursor.execute(f'PRAGMA table_info("{self.table_name}");')
+            pk_info = [row for row in cursor.fetchall() if row[5] > 0]
+            if pk_info:
+                pk_name = f"PK_{self.table_name}"
+                if "CONSTRAINT" in sql_def.upper() and "PRIMARY KEY" in sql_def.upper():
+                    for line in sql_def.split('\n'):
+                        if "CONSTRAINT" in line.upper() and "PRIMARY KEY" in line.upper():
+                            pk_name = line.split()[1].strip('`"')
+                            break
+                pk_cols = [row[1] for row in pk_info]
+                constraints['PRIMARY KEY'].append(
+                    [pk_name, ", ".join(pk_cols)])
+
+            cursor.execute(f'PRAGMA foreign_key_list("{self.table_name}");')
+            fks = {}
+            for row in cursor.fetchall():
+                fk_id, _, ref_table, from_col, to_col, _, _, _ = row
+                if fk_id not in fks:
+                    fks[fk_id] = {'from': [], 'to': [], 'ref_table': ref_table}
+                fks[fk_id]['from'].append(from_col)
+                fks[fk_id]['to'].append(to_col)
+
+            fk_names = {}
+            if sql_def:
+                fk_counter = 0
+                for line in sql_def.split('\n'):
+                    if line.strip().upper().startswith("CONSTRAINT") and "FOREIGN KEY" in line.upper():
+                        fk_names[fk_counter] = line.split()[1].strip('`"')
+                        fk_counter += 1
+            for i, fk_id in enumerate(fks):
+                name = fk_names.get(
+                    i, f"FK_{self.table_name}_{fks[fk_id]['ref_table']}_{fk_id}")
+                constraints['FOREIGN KEY'].append([name, ", ".join(
+                    fks[fk_id]['from']), fks[fk_id]['ref_table'], ", ".join(fks[fk_id]['to'])])
+
+            cursor.execute(f'PRAGMA index_list("{self.table_name}")')
+            for index in cursor.fetchall():
+                if index[2] == 1 and "sqlite_autoindex" not in index[1]:
+                    cursor.execute(f'PRAGMA index_info("{index[1]}")')
+                    cols = ", ".join([info[2] for info in cursor.fetchall()])
+                    constraints['UNIQUE'].append([index[1], cols])
+
+            if sql_def:
+                for line in sql_def.split('\n'):
+                    line = line.strip().rstrip(',')
+                    upper_line = line.upper()
+                    if upper_line.startswith("CONSTRAINT") and "CHECK" in upper_line:
+                        constraints['CHECK'].append(
+                            [line.split()[1].strip('`"'), line[line.find('('):].strip()])
+                    elif upper_line.startswith("CHECK"):
+                        constraints['CHECK'].append(
+                            [f"CK_{self.table_name}", line[line.find('('):].strip()])
+        finally:
+            if conn:
+                conn.close()
+        return constraints
+
+    def _fetch_postgres_constraints(self):
+        constraints = {'PRIMARY KEY': [],
+                       'FOREIGN KEY': [], 'UNIQUE': [], 'CHECK': []}
+        conn = None
+        try:
+            expected_keys = ['host', 'port', 'database', 'user', 'password']
+            pg_conn_data = {key: self.conn_data.get(
+                key) for key in expected_keys}
+            conn = db.create_postgres_connection(**pg_conn_data)
+            cursor = conn.cursor()
+
+            query_key = """
+                SELECT tc.constraint_name, tc.constraint_type, STRING_AGG(kcu.column_name, ', ' ORDER BY kcu.ordinal_position) AS columns
+                FROM information_schema.table_constraints AS tc
+                JOIN information_schema.key_column_usage AS kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+                WHERE tc.table_name = %s AND tc.table_schema = %s AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
+                GROUP BY tc.constraint_name, tc.constraint_type;
+            """
+            cursor.execute(query_key, (self.table_name, self.schema_name))
+            for name, type, cols in cursor.fetchall():
+                constraints[type].append([name, cols])
+
+            query_fk = """
+                SELECT rc.constraint_name,
+                       STRING_AGG(kcu.column_name, ', ' ORDER BY kcu.ordinal_position) AS foreign_columns,
+                       ccu.table_schema AS primary_table_schema, ccu.table_name AS primary_table_name,
+                       STRING_AGG(ccu.column_name, ', ' ORDER BY ccu.ordinal_position) AS primary_columns
+                FROM information_schema.referential_constraints AS rc
+                JOIN information_schema.key_column_usage AS kcu ON kcu.constraint_name = rc.constraint_name AND kcu.table_schema = %s
+                JOIN information_schema.key_column_usage AS ccu ON ccu.constraint_name = rc.unique_constraint_name AND ccu.table_schema = rc.unique_constraint_schema
+                WHERE kcu.table_name = %s AND kcu.table_schema = %s
+                GROUP BY rc.constraint_name, ccu.table_schema, ccu.table_name;
+            """
+            cursor.execute(query_fk, (self.schema_name,
+                           self.table_name, self.schema_name))
+            for name, f_cols, p_schema, p_table, p_cols in cursor.fetchall():
+                constraints['FOREIGN KEY'].append(
+                    [name, f_cols, f"{p_schema}.{p_table}", p_cols])
+
+            query_check = """
+                SELECT con.conname, pg_get_constraintdef(con.oid) as definition
+                FROM pg_constraint con
+                JOIN pg_class c ON c.oid = con.conrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE c.relname = %s AND n.nspname = %s AND con.contype = 'c';
+            """
+            cursor.execute(query_check, (self.table_name, self.schema_name))
+            for name, definition in cursor.fetchall():
+                constraints['CHECK'].append([name, definition])
+        finally:
+            if conn:
+                conn.close()
+        return constraints
+
 
 # Signals class for QRunnable worker
 
@@ -729,39 +1329,29 @@ class MainWindow(QMainWindow):
             f"ThreadPool: {active} active of {max_threads}", 3000)
 
     def _apply_styles(self):
-        # Color palette: #D3D3D3 (LightGray), #ADD8E6 (LightBlue), #C0C0C0 (Silver)
-        primary_color = "#D3D3D3"      # LightGray for backgrounds
-        header_color = "#ADD8E6"       # LightBlue for headers
-        selection_color = "#C0C0C0"    # Silver for selections and borders
-        text_color_on_dark = "#FFFFFF"  # White text on dark headers
-        text_color_on_light = "#000000"  # Black text on light backgrounds
-        alternate_row_color = "#E8E8E8"
+        # Using the user-provided hex codes
+        primary_color = "#D3D3D3"  # Light Gray
+        header_color = "#A9A9A9"   # Dark Gray
+        selection_color = "#A9A9A9"  # Dark Gray for selection
+        text_color_on_primary = "#000000"  # Black text on light gray
+        alternate_row_color = "#f0f0f0"
+        border_color = "#A9A9A9"  # Dark Gray for borders
 
         style_sheet = f"""
             QMainWindow, QToolBar, QStatusBar {{
                 background-color: {primary_color};
-                color: {text_color_on_light};
-            }}
-            QToolBar QToolButton {{
-                background-color: {header_color};
-                color: {text_color_on_light};
-                padding: 5px;
-                border-radius: 3px;
-                margin: 2px;
-            }}
-            QToolBar QToolButton:hover {{
-                background-color: #B0E0E6;
+                color: {text_color_on_primary};
             }}
             QTreeView {{
                 background-color: white;
                 alternate-background-color: {alternate_row_color};
-                border: 1px solid {selection_color};
+                border: 1px solid {border_color};
             }}
             QTableView {{
                 alternate-background-color: {alternate_row_color};
                 background-color: white;
                 gridline-color: #d0d0d0;
-                border: 1px solid {selection_color};
+                border: 1px solid {border_color};
                 font-family: Arial, sans-serif;
                 font-size: 9pt;
             }}
@@ -770,23 +1360,23 @@ class MainWindow(QMainWindow):
             }}
             QTableView::item:selected {{ 
                 background-color: {selection_color}; 
-                color: {text_color_on_light}; 
+                color: white; 
             }}
             QHeaderView::section {{
                 background-color: {header_color};
-                color: {text_color_on_light};
+                color: white;
                 padding: 6px;
-                border: 1px solid {selection_color};
+                border: 1px solid {border_color};
                 font-weight: bold;
                 font-size: 9pt;
             }}
             QTableView QTableCornerButton::section {{
                 background-color: {header_color};
-                border: 1px solid {selection_color};
+                border: 1px solid {border_color};
             }}
             #resultsHeader QPushButton, #editorHeader QPushButton {{
                 background-color: #ffffff;
-                border: 1px solid {selection_color};
+                border: 1px solid {border_color};
                 padding: 5px 15px;
                 font-size: 9pt;
             }}
@@ -797,6 +1387,7 @@ class MainWindow(QMainWindow):
                 background-color: {selection_color};
                 border-bottom: 1px solid {selection_color};
                 font-weight: bold;
+                color: white;
             }}
             #resultsHeader, #editorHeader {{
                 background-color: {alternate_row_color};
@@ -806,60 +1397,37 @@ class MainWindow(QMainWindow):
                 font-family: Consolas, monospace;
                 font-size: 10pt;
                 background-color: white;
-                border: 1px solid {selection_color};
+                border: 1px solid {border_color};
             }}
             #tab_status_label {{
                 padding: 3px 5px;
                 background-color: {alternate_row_color};
-                border-top: 1px solid {selection_color};
+                border-top: 1px solid {border_color};
             }}
             QGroupBox {{
                 font-size: 9pt;
                 font-weight: bold;
-                color: {text_color_on_light};
+                color: {text_color_on_primary};
             }}
             QTabWidget::pane {{
-                border-top: 1px solid {selection_color};
+                border-top: 1px solid {border_color};
             }}
             QTabBar::tab {{
-                background: {primary_color};
-                border: 1px solid {selection_color};
+                background: #E0E0E0;
+                border: 1px solid {border_color};
                 padding: 5px 10px;
                 border-bottom: none;
             }}
             QTabBar::tab:selected {{
                 background: {selection_color};
+                color: white;
             }}
             QComboBox {{
-                border: 1px solid {selection_color};
+                border: 1px solid {border_color};
                 padding: 2px;
                 background-color: white;
             }}
-            #change for count
-            /* ADD THESE NEW STYLES FOR NOTIFICATION WIDGET */
-            #notificationWidget {{
-                background-color: #3fb55a; /* Green for success */
-                color: #3fb55a;
-                border: 1px solid #c3e6cb;
-                border-radius: 1px;
-                font-size: 10pt;
-            }}
-            #notificationWidget[isError="true"] {{
-                background-color: #f8d7da; /* Red for error */
-                color: #721c24;
-                border: 1px solid #f5c6cb;
-            }}
-            #notificationCloseButton {{
-                background: transparent;
-                border: none;
-                font-weight: bold;
-                color: #555;
-            }}
-            #notificationCloseButton:hover {{
-                color: #000;
-            }}
         """
-
         self.setStyleSheet(style_sheet)
 
     def add_tab(self):
@@ -1183,13 +1751,6 @@ class MainWindow(QMainWindow):
         elif depth == 3:
             conn_data = item.data(Qt.ItemDataRole.UserRole)
             if conn_data:
-                # *** NEW ACTION ADDED HERE ***
-                view_details_action = QAction("View Details", self)
-                view_details_action.triggered.connect(
-                    lambda: self.view_connection_details(item))
-                menu.addAction(view_details_action)
-                menu.addSeparator()
-
                 if conn_data.get("db_path"):
                     edit_action = QAction("Edit Connection", self)
                     edit_action.triggered.connect(lambda: self.edit_item(item))
@@ -1199,246 +1760,10 @@ class MainWindow(QMainWindow):
                     edit_action.triggered.connect(
                         lambda: self.edit_pg_item(item))
                     menu.addAction(edit_action)
-
                 delete_action = QAction("Delete Connection", self)
                 delete_action.triggered.connect(lambda: self.delete_item(item))
                 menu.addAction(delete_action)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
-
-    # --- START OF NEW METHODS FOR VIEWING CONNECTION DETAILS ---
-
-    def view_connection_details(self, item):
-        """Determines connection type and shows the appropriate details dialog."""
-        conn_data = item.data(Qt.ItemDataRole.UserRole)
-        if not conn_data:
-            return
-
-        if conn_data.get("host"):  # PostgreSQL
-            self.show_postgres_details_dialog(conn_data)
-        elif conn_data.get("db_path"):  # SQLite
-            self.show_sqlite_details_dialog(conn_data)
-
-    def show_sqlite_details_dialog(self, conn_data):
-        """Shows a dialog with details for an SQLite connection."""
-        dialog = QDialog(self)
-        dialog.setWindowTitle(f"SQLite Details: {conn_data['name']}")
-        dialog.setMinimumSize(500, 400)
-
-        main_layout = QVBoxLayout(dialog)
-
-        # Connection Info
-        form_layout = QFormLayout()
-        form_layout.addRow("Database Name:", QLabel(
-            conn_data.get("name", "N/A")))
-        form_layout.addRow("Database Path:", QLabel(
-            conn_data.get("db_path", "N/A")))
-
-        main_layout.addLayout(form_layout)
-
-        # Schema Info
-        schema_group = QGroupBox("Schema (Tables and Columns)")
-        schema_layout = QVBoxLayout(schema_group)
-        main_layout.addWidget(schema_group)
-
-        tree_view = QTreeView()
-        tree_view.setHeaderHidden(True)
-        model = QStandardItemModel()
-        tree_view.setModel(model)
-        schema_layout.addWidget(tree_view)
-
-        try:
-            conn = sqlite.connect(conn_data['db_path'])
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
-            tables = cursor.fetchall()
-
-            for table_name_tuple in tables:
-                table_name = table_name_tuple[0]
-                table_item = QStandardItem(
-                    QIcon("assets/table_icon.png"), table_name)
-                table_item.setEditable(False)
-
-                cursor.execute(f'PRAGMA table_info("{table_name}");')
-                columns = cursor.fetchall()
-                for col in columns:
-                    col_name = col[1]
-                    col_type = col[2]
-                    not_null = "NOT NULL" if col[3] else ""
-                    pk = "PK" if col[5] else ""
-                    col_str = f"{col_name} ({col_type}) {not_null} {pk}".strip(
-                    )
-                    col_item = QStandardItem(col_str)
-                    col_item.setEditable(False)
-                    table_item.appendRow(col_item)
-                model.appendRow(table_item)
-
-            conn.close()
-        except Exception as e:
-            model.appendRow(QStandardItem(f"Error loading schema: {e}"))
-
-        ok_button = QPushButton("OK")
-        ok_button.clicked.connect(dialog.accept)
-        main_layout.addWidget(ok_button, alignment=Qt.AlignmentFlag.AlignRight)
-
-        dialog.exec()
-
-    def show_postgres_details_dialog(self, conn_data):
-        """Shows a dialog with details for a PostgreSQL connection."""
-        dialog = QDialog(self)
-        dialog.setWindowTitle(f"PostgreSQL Details: {conn_data['name']}")
-        dialog.setMinimumSize(600, 500)
-
-        main_layout = QVBoxLayout(dialog)
-        tab_widget = QTabWidget()
-        main_layout.addWidget(tab_widget)
-
-        # --- Database Connection and Data Fetching ---
-        owner = "N/A"
-        schemas = []
-        all_columns = []
-        all_constraints = []
-
-        try:
-            conn = db.create_postgres_connection(
-                host=conn_data["host"], database=conn_data["database"],
-                user=conn_data["user"], password=conn_data["password"],
-                port=int(conn_data["port"])
-            )
-            cursor = conn.cursor()
-
-            # Fetch Owner
-            cursor.execute(
-                "SELECT pg_catalog.pg_get_userbyid(d.datdba) FROM pg_catalog.pg_database d WHERE d.datname = %s;", (conn_data['database'],))
-            owner_result = cursor.fetchone()
-            if owner_result:
-                owner = owner_result[0]
-
-            # Fetch Schemas
-            cursor.execute(
-                "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast') ORDER BY schema_name;")
-            schemas = [s[0] for s in cursor.fetchall()]
-
-            # --- *** MODIFIED AND CORRECTED QUERY *** ---
-            # Fetch Columns for all tables in user schemas using a robust LEFT JOIN
-            if schemas:  # Only run if there are schemas to query
-                column_query = """
-                    SELECT
-                        c.table_schema,
-                        c.table_name,
-                        c.column_name,
-                        c.data_type,
-                        c.is_nullable,
-                        CASE WHEN pk.column_name IS NOT NULL THEN 'Yes' ELSE 'No' END AS is_primary_key
-                    FROM
-                        information_schema.columns AS c
-                    LEFT JOIN (
-                        SELECT
-                            kcu.table_schema,
-                            kcu.table_name,
-                            kcu.column_name
-                        FROM
-                            information_schema.table_constraints AS tc
-                        JOIN information_schema.key_column_usage AS kcu
-                            ON tc.constraint_name = kcu.constraint_name
-                            AND tc.table_schema = kcu.table_schema
-                        WHERE
-                            tc.constraint_type = 'PRIMARY KEY'
-                    ) AS pk
-                        ON c.table_schema = pk.table_schema
-                        AND c.table_name = pk.table_name
-                        AND c.column_name = pk.column_name
-                    WHERE
-                        c.table_schema = ANY(%s)
-                    ORDER BY
-                        c.table_schema,
-                        c.table_name,
-                        c.ordinal_position;
-                """
-                cursor.execute(column_query, (schemas,))
-                all_columns = cursor.fetchall()
-
-                # Fetch Constraints
-                cursor.execute("""
-                    SELECT
-                        tc.constraint_name,
-                        tc.table_schema || '.' || tc.table_name as table_full_name,
-                        string_agg(kcu.column_name, ', ')
-                    FROM
-                        information_schema.table_constraints AS tc
-                    JOIN information_schema.key_column_usage AS kcu
-                        ON tc.constraint_name = kcu.constraint_name
-                    WHERE tc.table_schema = ANY(%s)
-                    GROUP BY tc.constraint_name, table_full_name ORDER BY table_full_name;
-                """, (schemas,))
-                all_constraints = cursor.fetchall()
-
-            conn.close()
-        except Exception as e:
-            QMessageBox.critical(self, "Connection Error",
-                                 f"Failed to fetch database details: {e}")
-            return
-
-        # --- Tab 1: General ---
-        general_tab = QWidget()
-        form_layout = QFormLayout(general_tab)
-        form_layout.addRow("Connection Name:", QLabel(
-            conn_data.get("name", "N/A")))
-        form_layout.addRow("Owner:", QLabel(owner))
-        form_layout.addRow("Schemas:", QLabel(
-            ", ".join(schemas) or "No user schemas found"))
-        tab_widget.addTab(general_tab, "General")
-
-        # --- Tab 2: Columns ---
-        columns_tab = QWidget()
-        columns_layout = QVBoxLayout(columns_tab)
-        columns_table = QTableView()
-        columns_table.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers)
-        columns_model = QStandardItemModel()
-        columns_model.setHorizontalHeaderLabels(
-            ["Schema", "Table", "Name", "Data Type", "Not Null", "Primary Key"])
-        for col in all_columns:
-            items = [
-                QStandardItem(str(col[0])),  # schema
-                QStandardItem(str(col[1])),  # table
-                QStandardItem(str(col[2])),  # column name
-                QStandardItem(str(col[3])),  # data type
-                QStandardItem("No" if col[4] == 'YES' else "Yes"),  # Not Null
-                QStandardItem(str(col[5]))     # Primary Key ('Yes' or 'No')
-            ]
-            columns_model.appendRow(items)
-        columns_table.setModel(columns_model)
-        columns_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents)
-        columns_layout.addWidget(columns_table)
-        tab_widget.addTab(columns_tab, "Columns")
-
-        # --- Tab 3: Constraints ---
-        constraints_tab = QWidget()
-        constraints_layout = QVBoxLayout(constraints_tab)
-        constraints_table = QTableView()
-        constraints_table.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers)
-        constraints_model = QStandardItemModel()
-        constraints_model.setHorizontalHeaderLabels(
-            ["Name", "Table", "Columns"])
-        for const in all_constraints:
-            items = [QStandardItem(str(c)) for c in const]
-            constraints_model.appendRow(items)
-        constraints_table.setModel(constraints_model)
-        constraints_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents)
-        constraints_layout.addWidget(constraints_table)
-        tab_widget.addTab(constraints_tab, "Constraints")
-
-        ok_button = QPushButton("OK")
-        ok_button.clicked.connect(dialog.accept)
-        main_layout.addWidget(ok_button, alignment=Qt.AlignmentFlag.AlignRight)
-
-        dialog.exec()
-
-    # --- END OF NEW METHODS ---
 
     def add_subcategory(self, parent_item):
         name, ok = QInputDialog.getText(self, "New Group", "Group name:")
@@ -1986,9 +2311,21 @@ class MainWindow(QMainWindow):
         export_rows_action.triggered.connect(
             lambda: self.export_schema_table_rows(item_data, table_name))
         menu.addAction(export_rows_action)
+
+        # "Properties" অপশন যোগ করা হয়েছে
+        properties_action = QAction("Properties", self)
+        properties_action.triggered.connect(
+            lambda: self.show_table_properties(item_data, table_name))
+        menu.addAction(properties_action)
+
+        menu.exec(self.schema_tree.viewport().mapToGlobal(position))
         menu.exec(self.schema_tree.viewport().mapToGlobal(position))
 
+    def show_table_properties(self, item_data, table_name):
+        dialog = TablePropertiesDialog(item_data, table_name, self)
+        dialog.exec()
     # <<< MODIFIED >>> This function now creates and opens the Processes tab.
+
     def export_schema_table_rows(self, item_data, table_name):
         if not item_data:
             return
