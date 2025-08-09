@@ -170,44 +170,34 @@ class NotificationManager:
 
             # Add spacing for the next notification above it
             y -= self.spacing
-# pgAdmin-style Export Dialog with Tabs
 
-
+# MODIFIED Export Dialog
 class ExportDialog(QDialog):
     """
-    A custom dialog to get options for exporting data, with tabs like pgAdmin.
+    A custom dialog to get options for exporting data.
     """
 
     def __init__(self, parent=None, default_filename="export.csv"):
         super().__init__(parent)
-        self.setWindowTitle("Import/Export data")
+        # MODIFIED: Title changed as Import is removed
+        self.setWindowTitle("Export Data")
         self.setMinimumWidth(550)
 
         main_layout = QVBoxLayout(self)
-
-        # Main Tab Widget
         tab_widget = QTabWidget()
         main_layout.addWidget(tab_widget)
 
-        # Create Tabs
         general_tab = QWidget()
         options_tab = QWidget()
-
         tab_widget.addTab(general_tab, "General")
         tab_widget.addTab(options_tab, "Options")
 
         # --- General Tab Layout ---
         general_layout = QFormLayout(general_tab)
 
-        # Import/Export Switch
-        self.export_radio = QRadioButton("Export")
-        self.import_radio = QRadioButton("Import")
-        self.export_radio.setChecked(True)
-        self.import_radio.setEnabled(False)  # Import not implemented
-        switch_layout = QHBoxLayout()
-        switch_layout.addWidget(self.export_radio)
-        switch_layout.addWidget(self.import_radio)
-        general_layout.addRow("Import/Export:", switch_layout)
+        # MODIFIED: Removed Import/Export radio buttons as only Export is supported
+        # A simple label to indicate the action
+        general_layout.addRow("Action:", QLabel("Export"))
 
         # Filename
         self.filename_edit = QLineEdit(default_filename)
@@ -223,8 +213,11 @@ class ExportDialog(QDialog):
 
         # Format
         self.format_combo = QComboBox()
-        self.format_combo.addItems(["csv", "binary", "text"])
+        # MODIFIED: Items changed to csv and xlsx
+        self.format_combo.addItems(["csv", "xlsx"])
         self.format_combo.setCurrentText("csv")
+        # Connect signal to update UI based on format
+        self.format_combo.currentTextChanged.connect(self.on_format_change)
         general_layout.addRow("Format:", self.format_combo)
 
         # Encoding
@@ -235,19 +228,24 @@ class ExportDialog(QDialog):
 
         # --- Options Tab Layout ---
         options_layout = QFormLayout(options_tab)
+        self.options_layout = options_layout # to access it later
 
         self.header_check = QCheckBox("Header")
         self.header_check.setChecked(True)
         options_layout.addRow("Options:", self.header_check)
 
+        # Delimiter and Quote options are specific to CSV
+        self.delimiter_label = QLabel("Delimiter:")
         self.delimiter_combo = QComboBox()
         self.delimiter_combo.addItems([',', ';', '|', '\\t'])
         self.delimiter_combo.setEditable(True)
-        options_layout.addRow("Delimiter:", self.delimiter_combo)
-
+        
+        self.quote_label = QLabel("Quote character:")
         self.quote_edit = QLineEdit('"')
         self.quote_edit.setMaxLength(1)
-        options_layout.addRow("Quote character:", self.quote_edit)
+
+        options_layout.addRow(self.delimiter_label, self.delimiter_combo)
+        options_layout.addRow(self.quote_label, self.quote_edit)
 
         # OK and Cancel buttons
         button_box = QDialogButtonBox(
@@ -255,10 +253,30 @@ class ExportDialog(QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         main_layout.addWidget(button_box)
+        
+        # Set initial state
+        self.on_format_change(self.format_combo.currentText())
+
+    def on_format_change(self, format_text):
+        """Show/hide options based on the selected format."""
+        is_csv = (format_text == 'csv')
+        self.encoding_combo.setEnabled(is_csv)
+        self.delimiter_label.setVisible(is_csv)
+        self.delimiter_combo.setVisible(is_csv)
+        self.quote_label.setVisible(is_csv)
+        self.quote_edit.setVisible(is_csv)
+        
+        # Update filename extension
+        current_filename = self.filename_edit.text()
+        base_name, _ = os.path.splitext(current_filename)
+        self.filename_edit.setText(f"{base_name}.{format_text}")
+
 
     def browse_file(self):
+        # MODIFIED: File filter updated for both CSV and Excel
+        file_filter = "CSV Files (*.csv);;Excel Files (*.xlsx);;All Files (*)"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Select Output File", self.filename_edit.text(), "CSV Files (*.csv);;All Files (*)")
+            self, "Select Output File", self.filename_edit.text(), file_filter)
         if path:
             self.filename_edit.setText(path)
 
@@ -891,7 +909,7 @@ class ProcessSignals(QObject):
     error = pyqtSignal(str, str)  # process_id, error_message
 
 
-# Worker for Asynchronous Export
+# MODIFIED Worker for Asynchronous Export (handles both CSV and Excel)
 class RunnableExport(QRunnable):
     def __init__(self, process_id, item_data, table_name, export_options, signals):
         super().__init__()
@@ -927,16 +945,27 @@ class RunnableExport(QRunnable):
                     "Failed to connect to the database for export.")
 
             df = pd.read_sql_query(query, conn)
-
             file_path = self.export_options['filename']
-            df.to_csv(
-                file_path,
-                index=False,
-                header=self.export_options['header'],
-                sep=self.export_options['delimiter'],
-                encoding=self.export_options['encoding'],
-                quotechar=self.export_options['quote']
-            )
+            file_format = self.export_options['format']
+
+            # MODIFIED: Logic to handle different file formats
+            if file_format == 'xlsx':
+                # Use pandas to_excel method to save the DataFrame
+                # Note: openpyxl must be installed (pip install openpyxl)
+                df.to_excel(
+                    file_path,
+                    index=False,
+                    header=self.export_options['header']
+                )
+            else: # Default to CSV
+                df.to_csv(
+                    file_path,
+                    index=False,
+                    header=self.export_options['header'],
+                    sep=self.export_options['delimiter'],
+                    encoding=self.export_options['encoding'],
+                    quotechar=self.export_options['quote']
+                )
 
             time_taken = time.time() - start_time
             success_message = f"Successfully exported {len(df)} rows to {os.path.basename(file_path)}"
@@ -1463,7 +1492,7 @@ class MainWindow(QMainWindow):
         editor_stack = QStackedWidget()
         editor_stack.setObjectName("editor_stack")
         text_edit = QTextEdit()
-        text_edit.setPlaceholderText("Write your SQL query here...")
+        text_edit.setPlaceholderText("Write Query")
         text_edit.setObjectName("query_editor")
         editor_stack.addWidget(text_edit)
         history_widget = QSplitter(Qt.Orientation.Horizontal)
@@ -1561,7 +1590,7 @@ class MainWindow(QMainWindow):
         else:
             spinner_label.setMovie(spinner_movie)
             spinner_movie.setScaledSize(QSize(32, 32))
-        loading_text_label = QLabel("Waiting for query to complete...")
+        loading_text_label = QLabel("Waiting for query to complete")
         font = QFont()
         font.setPointSize(10)
         loading_text_label.setFont(font)
@@ -1620,7 +1649,7 @@ class MainWindow(QMainWindow):
                                 "Export cancelled. No filename specified.")
             return
         try:
-            self.status_message_label.setText("Exporting data...")
+            self.status_message_label.setText("Exporting Data")
             QApplication.processEvents()
             columns = [model.headerData(i, Qt.Orientation.Horizontal)
                        for i in range(model.columnCount())]
@@ -1630,10 +1659,16 @@ class MainWindow(QMainWindow):
                             for col in range(model.columnCount())]
                 data.append(row_data)
             df = pd.DataFrame(data, columns=columns)
-            df.to_csv(
-                file_path, index=False, header=options['header'], sep=options['delimiter'],
-                encoding=options['encoding'], quotechar=options['quote']
-            )
+
+            # MODIFIED: Logic to handle different file formats
+            if options['format'] == 'xlsx':
+                df.to_excel(file_path, index=False, header=options['header'])
+            else: # Default to CSV
+                df.to_csv(
+                    file_path, index=False, header=options['header'], sep=options['delimiter'],
+                    encoding=options['encoding'], quotechar=options['quote']
+                )
+
             QMessageBox.information(
                 self, "Success", f"Data successfully exported to:\n{file_path}")
             self.status_message_label.setText(
@@ -2529,3 +2564,4 @@ class MainWindow(QMainWindow):
                 item.appendRow([table_item, type_item])
         except Exception as e:
             self.status.showMessage(f"Error expanding schema: {e}", 5000)
+
