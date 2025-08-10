@@ -15,13 +15,13 @@ class SQLiteConnectionDialog(QDialog):
 
         self.name_input = QLineEdit()
         self.path_input = QLineEdit()
-
+        self.browse_btn = QPushButton("Browse")
+        self.browse_btn.clicked.connect(self.browse_file)
         form = QFormLayout()
         form.addRow("Connection Name:", self.name_input)
         form.addRow("Database Path:", self.path_input)
 
-        self.browse_btn = QPushButton("Browse")
-        self.browse_btn.clicked.connect(self.browse_file)
+        
         # self.create_btn = QPushButton("Create New DB")
         # self.create_btn.clicked.connect(self.create_new_db)
 
@@ -33,7 +33,8 @@ class SQLiteConnectionDialog(QDialog):
         if is_editing:
             self.name_input.setText(self.conn_data.get("name", ""))
             self.path_input.setText(self.conn_data.get("db_path", ""))
-
+        self.test_btn = QPushButton("Test Connection")
+        self.test_btn.clicked.connect(self.test_connection)
         self.save_btn = QPushButton("Update" if is_editing else "Save")
         self.save_btn.clicked.connect(self.save_connection)
         self.cancel_btn = QPushButton("Cancel")
@@ -42,6 +43,7 @@ class SQLiteConnectionDialog(QDialog):
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.cancel_btn)
         button_layout.addStretch()
+        button_layout.addWidget(self.test_btn)
         button_layout.addWidget(self.save_btn)
 
         layout = QVBoxLayout()
@@ -67,6 +69,18 @@ class SQLiteConnectionDialog(QDialog):
     #                 self, "Success", f"Database created successfully at:\n{file_path}")
     #         except Exception as e:
     #             QMessageBox.critical(self, "Error", f"Could not create database:\n{e}")
+    def test_connection(self):
+        db_path = self.path_input.text().strip()
+        
+        if not db_path:
+            QMessageBox.warning(self, "Input Error", "Please provide the database file path first.")
+            return
+        try:
+            conn = sqlite.connect(db_path)
+            conn.close()
+            QMessageBox.information(self, "Success", "Connection successful!")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to connect:\n{e}")
 
     def save_connection(self):
         if not self.name_input.text().strip() or not self.path_input.text().strip():
