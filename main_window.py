@@ -172,6 +172,8 @@ class NotificationManager:
             y -= self.spacing
 
 # MODIFIED Export Dialog
+
+
 class ExportDialog(QDialog):
     """
     A custom dialog to get options for exporting data.
@@ -228,7 +230,7 @@ class ExportDialog(QDialog):
 
         # --- Options Tab Layout ---
         options_layout = QFormLayout(options_tab)
-        self.options_layout = options_layout # to access it later
+        self.options_layout = options_layout  # to access it later
 
         self.header_check = QCheckBox("Header")
         self.header_check.setChecked(True)
@@ -239,7 +241,7 @@ class ExportDialog(QDialog):
         self.delimiter_combo = QComboBox()
         self.delimiter_combo.addItems([',', ';', '|', '\\t'])
         self.delimiter_combo.setEditable(True)
-        
+
         self.quote_label = QLabel("Quote character:")
         self.quote_edit = QLineEdit('"')
         self.quote_edit.setMaxLength(1)
@@ -253,7 +255,7 @@ class ExportDialog(QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         main_layout.addWidget(button_box)
-        
+
         # Set initial state
         self.on_format_change(self.format_combo.currentText())
 
@@ -265,12 +267,11 @@ class ExportDialog(QDialog):
         self.delimiter_combo.setVisible(is_csv)
         self.quote_label.setVisible(is_csv)
         self.quote_edit.setVisible(is_csv)
-        
+
         # Update filename extension
         current_filename = self.filename_edit.text()
         base_name, _ = os.path.splitext(current_filename)
         self.filename_edit.setText(f"{base_name}.{format_text}")
-
 
     def browse_file(self):
         # MODIFIED: File filter updated for both CSV and Excel
@@ -957,7 +958,7 @@ class RunnableExport(QRunnable):
                     index=False,
                     header=self.export_options['header']
                 )
-            else: # Default to CSV
+            else:  # Default to CSV
                 df.to_csv(
                     file_path,
                     index=False,
@@ -1663,7 +1664,7 @@ class MainWindow(QMainWindow):
             # MODIFIED: Logic to handle different file formats
             if options['format'] == 'xlsx':
                 df.to_excel(file_path, index=False, header=options['header'])
-            else: # Default to CSV
+            else:  # Default to CSV
                 df.to_csv(
                     file_path, index=False, header=options['header'], sep=options['delimiter'],
                     encoding=options['encoding'], quotechar=options['quote']
@@ -1786,6 +1787,12 @@ class MainWindow(QMainWindow):
         elif depth == 3:
             conn_data = item.data(Qt.ItemDataRole.UserRole)
             if conn_data:
+                view_details_action = QAction("View details", self)
+                view_details_action.triggered.connect(
+                    lambda: self.show_connection_details(item))
+                menu.addAction(view_details_action)
+                menu.addSeparator()
+
                 if conn_data.get("db_path"):
                     edit_action = QAction("Edit Connection", self)
                     edit_action.triggered.connect(lambda: self.edit_item(item))
@@ -1799,6 +1806,40 @@ class MainWindow(QMainWindow):
                 delete_action.triggered.connect(lambda: self.delete_item(item))
                 menu.addAction(delete_action)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def show_connection_details(self, item):
+        """
+        Displays connection details in a message box.
+        The details shown depend on the connection type (PostgreSQL or SQLite).
+        """
+        conn_data = item.data(Qt.ItemDataRole.UserRole)
+        if not conn_data:
+            QMessageBox.warning(
+                self, "Error", "Could not retrieve connection data.")
+            return
+
+        details_title = f"Connection Details: {conn_data.get('name')}"
+
+        # Determine the type and build the details string
+        if conn_data.get("host"):  # This indicates a PostgreSQL connection
+            details_text = (
+                f"<b>Name:</b> {conn_data.get('name', 'N/A')}<br>"
+                f"<b>Type:</b> PostgreSQL<br>"
+                f"<b>Host:</b> {conn_data.get('host', 'N/A')}<br>"
+                f"<b>Port:</b> {conn_data.get('port', 'N/A')}<br>"
+                f"<b>Database:</b> {conn_data.get('database', 'N/A')}<br>"
+                f"<b>User:</b> {conn_data.get('user', 'N/A')}"
+            )
+        elif conn_data.get("db_path"):  # This indicates a SQLite connection
+            details_text = (
+                f"<b>Name:</b> {conn_data.get('name', 'N/A')}<br>"
+                f"<b>Type:</b> SQLite<br>"
+                f"<b>Database Path:</b> {conn_data.get('db_path', 'N/A')}"
+            )
+        else:
+            details_text = "Could not determine connection type or details."
+
+        QMessageBox.information(self, details_title, details_text)
 
     def add_subcategory(self, parent_item):
         name, ok = QInputDialog.getText(self, "New Group", "Group name:")
@@ -2564,4 +2605,3 @@ class MainWindow(QMainWindow):
                 item.appendRow([table_item, type_item])
         except Exception as e:
             self.status.showMessage(f"Error expanding schema: {e}", 5000)
-
