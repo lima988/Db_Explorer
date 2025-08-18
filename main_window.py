@@ -1049,7 +1049,7 @@ class MainWindow(QMainWindow):
         self.schema_tree.customContextMenuRequested.connect(
             self.show_schema_context_menu)
         self.left_vertical_splitter.addWidget(self.schema_tree)
-        self.left_vertical_splitter.setSizes([240, 360])
+        self.left_vertical_splitter.setSizes([400, 400])
         left_layout.addWidget(self.left_vertical_splitter)
         self.main_splitter.addWidget(left_panel)
         self.tab_widget = QTabWidget()
@@ -1985,6 +1985,8 @@ class MainWindow(QMainWindow):
     def load_sqlite_schema(self, conn_data):
         self.schema_model.clear()
         self.schema_model.setHorizontalHeaderLabels(["Name", "Type"])
+        self.schema_tree.setColumnWidth(0, 200)  
+        self.schema_tree.setColumnWidth(1, 100) 
         db_path = conn_data.get("db_path")
         if not db_path or not os.path.exists(db_path):
             self.status.showMessage(
@@ -2046,7 +2048,8 @@ class MainWindow(QMainWindow):
             self.status.showMessage(f"Error loading schemas: {e}", 5000)
             if hasattr(self, 'pg_conn') and self.pg_conn:
                 self.pg_conn.close()
-
+        self.schema_tree.setColumnWidth(0, 200)  
+        self.schema_tree.setColumnWidth(1, 100) 
     def show_schema_context_menu(self, position):
         index = self.schema_tree.indexAt(position)
         if not index.isValid():
