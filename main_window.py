@@ -1570,7 +1570,7 @@ class MainWindow(QMainWindow):
         editor_header = QWidget()
         editor_header.setObjectName("editorHeader")
         editor_header_layout = QHBoxLayout(editor_header)
-        editor_header_layout.setContentsMargins(5, 2, 5, 0)
+        editor_header_layout.setContentsMargins(0, 2, 5, 0)
         editor_header_layout.setSpacing(2)
         query_view_btn, history_view_btn = QPushButton(
             "Query"), QPushButton("Query History")
@@ -1644,11 +1644,11 @@ class MainWindow(QMainWindow):
         results_container = QWidget()
         results_layout = QVBoxLayout(results_container)
         results_layout.setContentsMargins(0, 5, 0, 0)
-        results_layout.setSpacing(0)
+        results_layout.setSpacing(2)
         results_header = QWidget()
         results_header.setObjectName("resultsHeader")
         header_layout = QHBoxLayout(results_header)
-        header_layout.setContentsMargins(5, 2, 5, 0)
+        header_layout.setContentsMargins(0, 2, 5, 0)
         header_layout.setSpacing(2)
         
         # <<< MODIFIED >>> Add "Processes" button
